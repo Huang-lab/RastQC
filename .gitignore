@@ -17,3 +17,14 @@ Thumbs.db
 
 # Original FastQC Java repo (reference only, not part of RastQC)
 /FastQC/
+
+# MultiQC (installed dependency, not part of repo)
+/MultiQC/
+
+# Large benchmark data and generated outputs (regenerate with paper scripts)
+/paper/data/
+/paper/benchmarks/rastqc_out/
+/paper/benchmarks/fastqc_out/
+/paper/benchmarks/comparison/
+/paper/benchmarks/concordance_v2/
+/paper/benchmarks/real_genomes/

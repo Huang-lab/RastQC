@@ -129,13 +129,22 @@ impl QCModule for BasicStats {
             .map(|e| e.name().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
+        let total_bases_str = if self.total_bases >= 1_000_000_000 {
+            format!("{:.1} Gbp", self.total_bases as f64 / 1_000_000_000.0)
+        } else if self.total_bases >= 1_000_000 {
+            format!("{} Mbp", self.total_bases / 1_000_000)
+        } else {
+            format!("{}", self.total_bases)
+        };
+
         format!(
             ">>Basic Statistics\t{}\n\
              #Measure\tValue\n\
-             Filename\t\n\
+             Filename\t{{}}\n\
              File type\tConventional base calls\n\
              Encoding\t{}\n\
              Total Sequences\t{}\n\
+             Total Bases\t{}\n\
              Sequences flagged as poor quality\t{}\n\
              Sequence length\t{}\n\
              %GC\t{}\n\
@@ -143,6 +152,7 @@ impl QCModule for BasicStats {
             self.result().label(),
             encoding_str,
             self.total_sequences,
+            total_bases_str,
             self.filtered_sequences,
             length_str,
             self.gc_percent.round() as u64

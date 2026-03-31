@@ -36,6 +36,19 @@ impl OverrepresentedSeqs {
         }
     }
 
+    /// Expose sequence counts for the Duplication module (mirrors FastQC architecture)
+    pub fn sequence_counts(&self) -> &HashMap<String, u64> {
+        &self.sequences
+    }
+
+    pub fn count_at_unique_limit(&self) -> u64 {
+        self.count_at_limit
+    }
+
+    pub fn total_sequence_count(&self) -> u64 {
+        self.total_count
+    }
+
     fn find_contaminant(seq: &str, config: &FastQCConfig) -> String {
         let seq_upper = seq.to_uppercase();
         let mut best_name = String::from("No Hit");
@@ -171,12 +184,8 @@ impl QCModule for OverrepresentedSeqs {
             .map(|l| l.error)
             .unwrap_or(1.0);
 
-        // Apply correction if we hit the observation limit
-        let effective_total = if self.reached_limit {
-            self.count_at_limit as f64
-        } else {
-            self.total_count as f64
-        };
+        // Always use total count as denominator (matching FastQC behavior)
+        let effective_total = self.total_count as f64;
 
         // Find sequences above warning threshold
         let mut entries: Vec<(&String, &u64)> = self

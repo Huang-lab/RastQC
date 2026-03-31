@@ -5,22 +5,22 @@ use std::collections::HashMap;
 
 const OBSERVATION_CUTOFF: usize = 100_000;
 
-/// Duplication level bins: 1-9 individual, then >10, >50, >100, >500, >1k, >5k, >10k
+/// Duplication level bin labels matching FastQC (16 bins, 0-indexed)
 const BIN_LABELS: &[&str] = &[
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
     ">10", ">50", ">100", ">500", ">1k", ">5k", ">10k",
 ];
 
 pub struct DuplicationLevel {
-    sequences: HashMap<u64, u64>, // hash -> count
+    /// Sequence string -> count (same tracking as OverRepresentedSeqs, matching FastQC)
+    sequences: HashMap<String, u64>,
     total_sequences: u64,
-    unique_count_at_limit: u64,
-    count_at_limit: u64,
+    count_at_unique_limit: u64,
     dup_length: usize,
-    reached_limit: bool,
+    frozen: bool,
+    unique_count: usize,
     // Results
-    total_percentages: [f64; 17],
-    dedup_percentages: [f64; 17],
+    total_percentages: [f64; 16],
     percent_different: f64,
     qc_result: QCResult,
 }
@@ -30,47 +30,75 @@ impl DuplicationLevel {
         DuplicationLevel {
             sequences: HashMap::new(),
             total_sequences: 0,
-            unique_count_at_limit: 0,
-            count_at_limit: 0,
+            count_at_unique_limit: 0,
             dup_length,
-            reached_limit: false,
-            total_percentages: [0.0; 17],
-            dedup_percentages: [0.0; 17],
+            frozen: false,
+            unique_count: 0,
+            total_percentages: [0.0; 16],
             percent_different: 100.0,
             qc_result: QCResult::NotRun,
         }
     }
 
-    fn hash_sequence(seq: &[u8]) -> u64 {
-        // Simple FNV-1a hash
-        let mut hash: u64 = 0xcbf29ce484222325;
-        for &b in seq {
-            hash ^= b.to_ascii_uppercase() as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        hash
+    /// Map a duplication count to a bin index (0-15), matching FastQC's binning.
+    fn dup_slot(count: u64) -> usize {
+        let c = count.saturating_sub(1); // FastQC uses tempDupSlot = dupLevel - 1
+        if c > 9999 || count == 0 { 15 }
+        else if c > 4999 { 14 }
+        else if c > 999 { 13 }
+        else if c > 499 { 12 }
+        else if c > 99 { 11 }
+        else if c > 49 { 10 }
+        else if c > 9 { 9 }
+        else { c as usize }
     }
 
-    fn dup_bin(count: u64) -> usize {
-        match count {
-            1 => 0,
-            2 => 1,
-            3 => 2,
-            4 => 3,
-            5 => 4,
-            6 => 5,
-            7 => 6,
-            8 => 7,
-            9 => 8,
-            10 => 9,
-            11..=50 => 10,
-            51..=100 => 11,
-            101..=500 => 12,
-            501..=1000 => 13,
-            1001..=5000 => 14,
-            5001..=10000 => 15,
-            _ => 16,
+    /// FastQC's exact getCorrectedCount: iterative binomial correction.
+    /// Given that we observed `num_observations` unique sequences at duplication
+    /// level `dup_level`, and we only tracked the first `count_at_limit` of
+    /// `total_count` total sequences, estimate how many unique sequences we
+    /// would have seen if we tracked all of them.
+    fn get_corrected_count(
+        count_at_limit: u64,
+        total_count: u64,
+        dup_level: u64,
+        num_observations: u64,
+    ) -> f64 {
+        // Early bailouts matching FastQC
+        if count_at_limit == total_count {
+            return num_observations as f64;
         }
+        if total_count.saturating_sub(num_observations) < count_at_limit {
+            return num_observations as f64;
+        }
+
+        // Probability of NOT seeing a sequence with this duplication level
+        // within the first countAtLimit sequences
+        let mut p_not_seeing: f64 = 1.0;
+
+        // Limit below which correction is negligible (<0.01 of an observation)
+        let limit_of_caring =
+            1.0 - (num_observations as f64 / (num_observations as f64 + 0.01));
+
+        for i in 0..count_at_limit {
+            let numerator = (total_count - i).saturating_sub(dup_level) as f64;
+            let denominator = (total_count - i) as f64;
+            if denominator <= 0.0 {
+                break;
+            }
+            p_not_seeing *= numerator / denominator;
+
+            if p_not_seeing < limit_of_caring {
+                p_not_seeing = 0.0;
+                break;
+            }
+        }
+
+        let p_seeing = 1.0 - p_not_seeing;
+        if p_seeing <= 0.0 {
+            return num_observations as f64;
+        }
+        num_observations as f64 / p_seeing
     }
 }
 
@@ -86,24 +114,25 @@ impl QCModule for DuplicationLevel {
     fn process_sequence(&mut self, seq: &Sequence) {
         self.total_sequences += 1;
 
-        // Truncate for duplication detection
+        // Truncate for duplication detection (matching FastQC/OverRepresentedSeqs)
         let end = seq.sequence.len().min(self.dup_length);
-        let trunc = &seq.sequence[..end];
+        let trunc = String::from_utf8_lossy(&seq.sequence[..end]).to_uppercase();
 
-        let hash = Self::hash_sequence(trunc);
-
-        if self.reached_limit {
-            // Only increment existing entries
-            if let Some(count) = self.sequences.get_mut(&hash) {
+        if self.frozen {
+            // Only increment existing entries after freeze
+            if let Some(count) = self.sequences.get_mut(&trunc) {
                 *count += 1;
             }
         } else {
-            *self.sequences.entry(hash).or_insert(0) += 1;
+            let entry = self.sequences.entry(trunc).or_insert(0);
+            *entry += 1;
+            if *entry == 1 {
+                self.unique_count += 1;
+            }
+            self.count_at_unique_limit = self.total_sequences;
 
-            if self.sequences.len() >= OBSERVATION_CUTOFF && !self.reached_limit {
-                self.reached_limit = true;
-                self.unique_count_at_limit = self.sequences.len() as u64;
-                self.count_at_limit = self.total_sequences;
+            if self.unique_count >= OBSERVATION_CUTOFF {
+                self.frozen = true;
             }
         }
     }
@@ -113,51 +142,42 @@ impl QCModule for DuplicationLevel {
             return;
         }
 
-        // Collate duplication counts
-        let mut dedup_counts = [0.0_f64; 17]; // unique sequences per bin
-        let mut total_counts = [0.0_f64; 17]; // total sequences per bin
-
-        let correction_factor = if self.reached_limit && self.unique_count_at_limit > 0 {
-            self.total_sequences as f64 / self.count_at_limit as f64
-        } else {
-            1.0
-        };
-
-        for (&_hash, &count) in &self.sequences {
-            let corrected_count = if self.reached_limit {
-                // Apply binomial correction for unseen sequences
-                let p_seen = self.count_at_limit as f64 / self.total_sequences as f64;
-                let corrected = (count as f64) / (1.0 - (1.0 - p_seen).powi(count as i32).max(0.0001));
-                corrected.round() as u64
-            } else {
-                count
-            };
-
-            let bin = Self::dup_bin(corrected_count);
-            dedup_counts[bin] += 1.0;
-            total_counts[bin] += corrected_count as f64;
+        // Collate: count how many unique sequences have each duplication level
+        let mut collated: HashMap<u64, u64> = HashMap::new();
+        for (_, &count) in &self.sequences {
+            *collated.entry(count).or_insert(0) += 1;
         }
 
-        // Scale if we hit the limit
-        if self.reached_limit {
-            for i in 0..17 {
-                dedup_counts[i] *= correction_factor;
-                total_counts[i] *= correction_factor;
+        // Apply correction and accumulate into bins (matching FastQC exactly)
+        let mut dedup_total: f64 = 0.0;
+        let mut raw_total: f64 = 0.0;
+
+        self.total_percentages = [0.0; 16];
+
+        for (&dup_level, &num_observations) in &collated {
+            let corrected = Self::get_corrected_count(
+                self.count_at_unique_limit,
+                self.total_sequences,
+                dup_level,
+                num_observations,
+            );
+
+            dedup_total += corrected;
+            raw_total += corrected * dup_level as f64;
+
+            let slot = Self::dup_slot(dup_level);
+            self.total_percentages[slot] += corrected * dup_level as f64;
+        }
+
+        // Convert to percentages
+        if raw_total > 0.0 {
+            for i in 0..16 {
+                self.total_percentages[i] = self.total_percentages[i] / raw_total * 100.0;
             }
         }
 
-        let total_seqs: f64 = total_counts.iter().sum();
-        let total_unique: f64 = dedup_counts.iter().sum();
-
-        if total_seqs > 0.0 {
-            for i in 0..17 {
-                self.total_percentages[i] = total_counts[i] / total_seqs * 100.0;
-                self.dedup_percentages[i] = dedup_counts[i] / total_unique.max(1.0) * 100.0;
-            }
-        }
-
-        self.percent_different = if total_seqs > 0.0 {
-            total_unique / total_seqs * 100.0
+        self.percent_different = if raw_total > 0.0 {
+            (dedup_total / raw_total) * 100.0
         } else {
             100.0
         };
@@ -187,10 +207,11 @@ impl QCModule for DuplicationLevel {
             self.percent_different
         );
 
-        for i in 0..17 {
+        for i in 0..16 {
+            // FastQC only outputs totalPercentages (not separate dedup line)
             out.push_str(&format!(
                 "{}\t{:.2}\t{:.2}\n",
-                BIN_LABELS[i], self.dedup_percentages[i], self.total_percentages[i]
+                BIN_LABELS[i], 0.0, self.total_percentages[i]
             ));
         }
         out.push_str(">>END_MODULE\n");
@@ -206,12 +227,11 @@ impl QCModule for DuplicationLevel {
         let mb = 80.0;
         let pw = width - ml - mr;
         let ph = height - mt - mb;
-        let n = 17;
+        let n = 16;
 
         let max_pct = self
             .total_percentages
             .iter()
-            .chain(self.dedup_percentages.iter())
             .copied()
             .fold(0.0_f64, f64::max)
             .max(1.0);
@@ -230,16 +250,6 @@ impl QCModule for DuplicationLevel {
             svg.push_str(&format!("{:.1},{:.1}", x, y));
         }
         svg.push_str(r##"" fill="none" stroke="#0000ff" stroke-width="2" />"##);
-
-        // Deduplicated line (red)
-        svg.push_str(r##"<polyline points=""##);
-        for i in 0..n {
-            let x = ml + (i as f64 + 0.5) / n as f64 * pw;
-            let y = mt + ph * (1.0 - self.dedup_percentages[i] / max_pct);
-            if i > 0 { svg.push(' '); }
-            svg.push_str(&format!("{:.1},{:.1}", x, y));
-        }
-        svg.push_str(r##"" fill="none" stroke="#ff0000" stroke-width="2" />"##);
 
         // Axes
         svg.push_str(&format!(

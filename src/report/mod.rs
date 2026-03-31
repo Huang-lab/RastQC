@@ -126,7 +126,7 @@ fn text_data_to_html_table(text: &str) -> String {
     html
 }
 
-pub fn generate_text_data(_filename: &str, modules: &[Box<dyn QCModule>]) -> String {
+pub fn generate_text_data(filename: &str, modules: &[Box<dyn QCModule>]) -> String {
     let mut text = String::with_capacity(32 * 1024);
     text.push_str("##FastQC\t0.12.0\n");
 
@@ -134,7 +134,24 @@ pub fn generate_text_data(_filename: &str, modules: &[Box<dyn QCModule>]) -> Str
         text.push_str(&module.text_data());
     }
 
+    // Inject filename into Basic Statistics (replaces {} placeholder)
+    text = text.replacen("Filename\t{}", &format!("Filename\t{}", filename), 1);
+
     text
+}
+
+/// Generate summary.txt content: one line per module with status, name, filename.
+pub fn generate_summary_txt(filename: &str, modules: &[Box<dyn QCModule>]) -> String {
+    let mut out = String::new();
+    for module in modules {
+        out.push_str(&format!(
+            "{}\t{}\t{}\n",
+            module.result().label(),
+            module.name(),
+            filename
+        ));
+    }
+    out
 }
 
 pub fn write_zip_archive(
@@ -142,6 +159,7 @@ pub fn write_zip_archive(
     stem: &str,
     html: &str,
     text: &str,
+    summary_txt: &str,
 ) -> anyhow::Result<()> {
     let file = std::fs::File::create(path)?;
     let mut zip = zip::ZipWriter::new(file);
@@ -158,7 +176,7 @@ pub fn write_zip_archive(
     zip.write_all(text.as_bytes())?;
 
     zip.start_file(format!("{}/summary.txt", prefix), options)?;
-    // summary.txt not critical, but include basic pass/warn/fail
+    zip.write_all(summary_txt.as_bytes())?;
 
     zip.finish()?;
     Ok(())

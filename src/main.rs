@@ -15,8 +15,8 @@ use config::FastQCConfig;
 use io::SequenceReader;
 use modules::{ModuleFactory, QCResult};
 use report::{
-    generate_html_report, generate_summary_html, generate_summary_tsv, generate_text_data,
-    write_zip_archive,
+    generate_html_report, generate_summary_html, generate_summary_tsv, generate_summary_txt,
+    generate_text_data, write_zip_archive,
 };
 
 /// Per-file result summary used for the multi-file overview.
@@ -216,6 +216,7 @@ fn process_file(
     // Generate outputs
     let html = generate_html_report(&filename, &qc_modules);
     let text = generate_text_data(&filename, &qc_modules);
+    let summary_txt = generate_summary_txt(&filename, &qc_modules);
 
     let report_path;
     if cli.nozip {
@@ -224,7 +225,7 @@ fn process_file(
         std::fs::write(&html_path, &html)?;
     } else {
         let zip_path = outdir.join(format!("{}_fastqc.zip", stem));
-        write_zip_archive(&zip_path, &stem, &html, &text)?;
+        write_zip_archive(&zip_path, &stem, &html, &text, &summary_txt)?;
         report_path = format!("{}_fastqc.html", stem);
 
         if cli.extract {
@@ -232,6 +233,7 @@ fn process_file(
             std::fs::create_dir_all(&extract_dir)?;
             std::fs::write(extract_dir.join("fastqc_report.html"), &html)?;
             std::fs::write(extract_dir.join("fastqc_data.txt"), &text)?;
+            std::fs::write(extract_dir.join("summary.txt"), &summary_txt)?;
         }
 
         // Always write standalone HTML alongside ZIP for summary linking
