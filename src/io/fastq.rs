@@ -119,6 +119,18 @@ impl FastqReader {
         }
         let quality = quality_line.trim().as_bytes().to_vec();
 
+        // Auto-detect colorspace on first sequence
+        if self.colorspace_detected.is_none() {
+            self.colorspace_detected = Some(colorspace::is_colorspace(&sequence));
+        }
+
+        // Decode colorspace if detected
+        let sequence = if self.colorspace_detected == Some(true) {
+            colorspace::decode_colorspace(&sequence).unwrap_or(sequence)
+        } else {
+            sequence
+        };
+
         Ok(Some(Sequence {
             header,
             sequence,

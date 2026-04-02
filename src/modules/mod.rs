@@ -263,7 +263,12 @@ mod tests {
     #[test]
     fn test_base_group_short_reads() {
         let groups = BaseGroup::make_groups(50);
-        assert_eq!(groups.len(), 50); // all individual
+        // 9 individual (pos 0-8) + 5-bp bins for 9-49 = 9 + ceil(41/5) = 9 + 9 = 18
+        assert_eq!(groups.len(), 18);
+        assert_eq!(groups[0].label(), "1"); // first individual
+        assert_eq!(groups[8].label(), "9"); // last individual
+        assert_eq!(groups[9].label(), "10-14"); // first 5-bp bin
+        assert_eq!(groups.last().unwrap().end, 49);
     }
 
     #[test]

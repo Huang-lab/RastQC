@@ -156,7 +156,7 @@ impl QCModule for BasicStats {
             total_bases_str,
             self.filtered_sequences,
             length_str,
-            self.gc_percent as u64
+            self.gc_percent.round() as u64
         )
     }
 
