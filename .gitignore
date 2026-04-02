@@ -25,7 +25,14 @@ Thumbs.db
 /paper/data/
 /paper/benchmarks/rastqc_out/
 /paper/benchmarks/fastqc_out/
+/paper/benchmarks/clean_benchmark_out/
 /paper/benchmarks/comparison/
 /paper/benchmarks/concordance_v2/
 /paper/benchmarks/real_genomes/
 /paper/*docx
+
+# Temporary experiment files
+ecoli_out/
+ecoli_test.json
+/paper/data/clean/
+

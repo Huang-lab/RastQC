@@ -169,7 +169,12 @@ impl BaseGroup {
         }
     }
 
-    /// Create base groups for a given max length, using adaptive binning
+    /// Create base groups for a given max length, matching FastQC's binning:
+    /// 1-9: individual positions
+    /// 10-49: every 5 bp (10-14, 15-19, etc.)
+    /// 50-74: every 5 bp (50-54, 55-59, etc.)
+    /// 75-99: every 5 bp (75-79, 80-84, etc.)
+    /// 100+: every 5 bp until long read threshold, then larger bins
     pub fn make_groups(max_length: usize) -> Vec<BaseGroup> {
         if max_length == 0 {
             return vec![];
@@ -177,47 +182,31 @@ impl BaseGroup {
 
         let mut groups = Vec::new();
 
-        if max_length <= 75 {
-            // Individual positions
-            for i in 0..max_length {
-                groups.push(BaseGroup { start: i, end: i });
-            }
-        } else {
-            // First 9 individually
-            let individual = 9.min(max_length);
-            for i in 0..individual {
-                groups.push(BaseGroup { start: i, end: i });
-            }
+        // 1-9 individually
+        let individual = 9.min(max_length);
+        for i in 0..individual {
+            groups.push(BaseGroup { start: i, end: i });
+        }
 
-            // Then groups of increasing size
-            let mut pos = individual;
-            let mut group_size = if max_length <= 200 {
-                2
-            } else if max_length <= 500 {
+        let mut pos = individual;
+        while pos < max_length {
+            let group_size = if pos < 50 {
+                // 10-49: 5bp
                 5
+            } else if pos < 100 {
+                // 50-99: 5bp
+                5
+            } else if pos < 500 {
+                // 100-499: 5bp or 10bp depending on total len
+                if max_length > 200 { 10 } else { 5 }
             } else {
-                10
+                // 500+: 50bp
+                50
             };
 
-            while pos < max_length {
-                let end = (pos + group_size - 1).min(max_length - 1);
-                groups.push(BaseGroup {
-                    start: pos,
-                    end,
-                });
-                pos = end + 1;
-
-                // Increase group size at thresholds
-                if pos >= 50 && group_size < 5 {
-                    group_size = 5;
-                }
-                if pos >= 100 && group_size < 10 {
-                    group_size = 10;
-                }
-                if pos >= 500 && group_size < 50 {
-                    group_size = 50;
-                }
-            }
+            let end = (pos + group_size - 1).min(max_length - 1);
+            groups.push(BaseGroup { start: pos, end });
+            pos = end + 1;
         }
 
         groups
