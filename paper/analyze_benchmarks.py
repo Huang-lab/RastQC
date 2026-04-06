@@ -1,387 +1,353 @@
 #!/usr/bin/env python3
 """
-Analyze RastQC benchmark results and generate:
-1. Markdown tables for manuscript
-2. SVG figures for key performance metrics
-3. Concordance summary
+Generate SVG figures and markdown tables from RastQC benchmark results.
+
+Reads: benchmark/results/benchmark_results.csv (produced by benchmark/run_benchmark.sh)
+Outputs: paper/figures/fig1_short_read_speed.svg
+         paper/figures/fig2_long_read_speed.svg
+         paper/figures/fig3_memory_comparison.svg
 """
 
+import csv
 import os
 import sys
 
 PAPER_DIR = os.path.dirname(os.path.abspath(__file__))
-BENCH_DIR = os.path.join(PAPER_DIR, "benchmarks")
+PROJECT_DIR = os.path.dirname(PAPER_DIR)
+CSV_PATH = os.path.join(PROJECT_DIR, "benchmark", "results", "benchmark_results.csv")
+FIG_DIR = os.path.join(PAPER_DIR, "figures")
 
-# ─── Load Data ────────────────────────────────────────────────────────────────
 
-def load_tsv(path):
+def load_results():
     rows = []
-    with open(path) as f:
-        header = f.readline().strip().split("\t")
-        for line in f:
-            vals = line.strip().split("\t")
-            if len(vals) >= len(header):
-                rows.append(dict(zip(header, vals)))
+    with open(CSV_PATH) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            rows.append(row)
     return rows
 
-# ─── Synthetic Benchmark Table ────────────────────────────────────────────────
 
-def generate_synthetic_table():
-    path = os.path.join(BENCH_DIR, "benchmark_results_v2.tsv")
-    rows = load_tsv(path)
+# ─── Figure 1: Short-Read Speed Comparison ──────────────────────────────────
 
-    datasets = [
-        ("startup", "Startup (1 read)", 1),
-        ("100K", "100K synthetic", 100_000),
-        ("1M", "1M synthetic", 1_000_000),
-        ("1M_gz", "1M gzipped", 1_000_000),
-    ]
+def fig1_short_read_speed(rows):
+    short = [r for r in rows if r["type"] == "short" and r["file"] != "ALL_SHORT"]
+    files = []
+    seen = set()
+    for r in short:
+        if r["file"] not in seen:
+            files.append(r["file"])
+            seen.add(r["file"])
 
-    print("## Table 3: Performance comparison on synthetic datasets (single-threaded)")
-    print()
-    print("| Dataset | Reads | RastQC Time | FastQC Time | Speedup | RastQC RSS | FastQC RSS |")
-    print("|---------|-------|-------------|-------------|---------|------------|------------|")
-
-    for key, label, reads in datasets:
-        r = [x for x in rows if x["Tool"] == "RastQC" and x["Dataset"] == key]
-        f = [x for x in rows if x["Tool"] == "FastQC" and x["Dataset"] == key]
-        if not r or not f:
-            continue
-        r, f = r[0], f[0]
-        rt = float(r["Time_s"])
-        ft = float(f["Time_s"])
-        speedup = ft / rt if rt > 0 else float("inf")
-        r_mb = int(r["RSS_bytes"]) / 1_048_576
-        f_mb = int(f["RSS_bytes"]) / 1_048_576
-
-        if rt < 0.01:
-            rt_str = f"{rt*1000:.0f} ms"
-        else:
-            rt_str = f"{rt:.2f} s"
-        ft_str = f"{ft:.2f} s"
-        sp_str = f"{speedup:.1f}x" if speedup < 1000 else f"{speedup:.0f}x"
-
-        print(f"| {label} | {reads:,} | {rt_str} | {ft_str} | {sp_str} | {r_mb:.0f} MB | {f_mb:.0f} MB |")
-
-    print()
-
-# ─── Real Genome Benchmark Table ─────────────────────────────────────────────
-
-def generate_real_genome_table():
-    path = os.path.join(BENCH_DIR, "real_genomes", "real_genome_benchmarks.tsv")
-    rows = load_tsv(path)
-
-    organisms = [
-        ("fly", "*D. melanogaster*"),
-        ("yeast", "*S. cerevisiae*"),
-        ("ecoli", "*E. coli* K-12"),
-        ("mouse", "*M. musculus*"),
-        ("human", "*H. sapiens*"),
-    ]
-
-    print("## Table 4: Performance comparison on real genome data")
-    print()
-    print("| Organism | Reads | Read Len | RastQC Time | FastQC Time | Speedup | RastQC RSS | FastQC RSS | Mem. Ratio |")
-    print("|----------|-------|----------|-------------|-------------|---------|------------|------------|------------|")
-
-    for key, label in organisms:
-        r = [x for x in rows if x["Tool"] == "RastQC" and x["Organism"] == key]
-        f = [x for x in rows if x["Tool"] == "FastQC" and x["Organism"] == key]
-        if not r or not f:
-            continue
-        r, f = r[0], f[0]
-        rt = float(r["Time_s"])
-        ft = float(f["Time_s"])
-        speedup = ft / rt if rt > 0 else 0
-        r_mb = int(r["RSS_bytes"]) / 1_048_576
-        f_mb = int(f["RSS_bytes"]) / 1_048_576
-        mem_ratio = f_mb / r_mb if r_mb > 0 else 0
-        reads = int(r["Reads"])
-        readlen = r["ReadLength"]
-
-        print(f"| {label} | {reads:,} | {readlen} bp | {rt:.2f} s | {ft:.2f} s | {speedup:.1f}x | {r_mb:.0f} MB | {f_mb:.0f} MB | {mem_ratio:.0f}x |")
-
-    print()
-
-# ─── Concordance Table ────────────────────────────────────────────────────────
-
-def generate_concordance_table():
-    path = os.path.join(BENCH_DIR, "concordance_v2", "concordance_results.tsv")
-    rows = load_tsv(path)
-
-    print("## Table 6: Module-level concordance across five model organisms")
-    print()
-    print("| Module | Concordant | Discordant |")
-    print("|--------|-----------|------------|")
-
-    for row in rows:
-        print(f"| {row['Module']} | {row['Concordant']} | {row['Discordant']} |")
-
-    print()
-
-# ─── SVG Figure Generation ───────────────────────────────────────────────────
-
-def generate_speedup_figure():
-    """Generate SVG bar chart comparing RastQC vs FastQC speed."""
-    path = os.path.join(BENCH_DIR, "real_genomes", "real_genome_benchmarks.tsv")
-    rows = load_tsv(path)
-
-    organisms = ["fly", "yeast", "ecoli", "mouse", "human"]
-    labels = ["Fly", "Yeast", "E. coli", "Mouse", "Human"]
-
-    rastqc_times = []
+    labels = []
     fastqc_times = []
-    for org in organisms:
-        r = [x for x in rows if x["Tool"] == "RastQC" and x["Organism"] == org][0]
-        f = [x for x in rows if x["Tool"] == "FastQC" and x["Organism"] == org][0]
-        rastqc_times.append(float(r["Time_s"]))
-        fastqc_times.append(float(f["Time_s"]))
+    rastqc_times = []
+    for fname in files:
+        fqc = [r for r in short if r["file"] == fname and r["tool"] == "fastqc"]
+        rqc = [r for r in short if r["file"] == fname and r["tool"] == "rastqc"]
+        if fqc and rqc:
+            label = fname.replace(".fastq.gz", "").replace("_", " ")
+            if len(label) > 15:
+                label = label[:12] + "..."
+            labels.append(label)
+            fastqc_times.append(float(fqc[0]["real_sec"]))
+            rastqc_times.append(float(rqc[0]["real_sec"]))
 
-    max_time = max(max(rastqc_times), max(fastqc_times))
+    max_time = max(max(fastqc_times), max(rastqc_times)) * 1.15
 
     w, h = 700, 400
-    margin_left, margin_bottom, margin_top, margin_right = 80, 60, 40, 120
-    plot_w = w - margin_left - margin_right
-    plot_h = h - margin_top - margin_bottom
-    n = len(organisms)
-    group_w = plot_w / n
-    bar_w = group_w * 0.35
+    ml, mr, mt, mb = 80, 120, 40, 80
+    pw = w - ml - mr
+    ph = h - mt - mb
+    n = len(labels)
+    gw = pw / n
+    bw = gw * 0.35
 
     svg = []
     svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" font-family="Arial, sans-serif">')
     svg.append(f'<rect width="{w}" height="{h}" fill="white"/>')
-
-    # Title
-    svg.append(f'<text x="{w/2}" y="22" text-anchor="middle" font-size="14" font-weight="bold">Wall-Clock Time: RastQC vs FastQC (Real Genomes)</text>')
+    svg.append(f'<text x="{w/2}" y="22" text-anchor="middle" font-size="14" font-weight="bold">Short-Read Performance: RastQC vs FastQC</text>')
 
     # Y axis
-    y_ticks = [0, 5, 10, 15, 20, 25, 30]
+    y_max = int(max_time / 10 + 1) * 10
+    y_ticks = list(range(0, y_max + 1, max(y_max // 5, 1)))
     for t in y_ticks:
-        y = margin_top + plot_h - (t / max(y_ticks) * plot_h)
-        svg.append(f'<line x1="{margin_left}" y1="{y}" x2="{margin_left + plot_w}" y2="{y}" stroke="#e0e0e0" stroke-width="0.5"/>')
-        svg.append(f'<text x="{margin_left - 8}" y="{y + 4}" text-anchor="end" font-size="11" fill="#555">{t}s</text>')
+        y = mt + ph - (t / y_max * ph)
+        svg.append(f'<line x1="{ml}" y1="{y}" x2="{ml + pw}" y2="{y}" stroke="#e0e0e0" stroke-width="0.5"/>')
+        svg.append(f'<text x="{ml - 8}" y="{y + 4}" text-anchor="end" font-size="11" fill="#555">{t}s</text>')
 
-    # Bars
-    colors_r, colors_f = "#2980b9", "#e74c3c"
+    cr, cf = "#2980b9", "#e74c3c"
     for i in range(n):
-        x_center = margin_left + group_w * i + group_w / 2
-        x_r = x_center - bar_w - 2
-        x_f = x_center + 2
+        xc = ml + gw * i + gw / 2
+        xr = xc - bw - 2
+        xf = xc + 2
+        yb = mt + ph
 
-        h_r = (rastqc_times[i] / max(y_ticks)) * plot_h
-        h_f = (fastqc_times[i] / max(y_ticks)) * plot_h
-        y_base = margin_top + plot_h
+        hr = (rastqc_times[i] / y_max) * ph
+        hf = (fastqc_times[i] / y_max) * ph
 
-        svg.append(f'<rect x="{x_r}" y="{y_base - h_r}" width="{bar_w}" height="{h_r}" fill="{colors_r}" rx="2"/>')
-        svg.append(f'<rect x="{x_f}" y="{y_base - h_f}" width="{bar_w}" height="{h_f}" fill="{colors_f}" rx="2"/>')
+        svg.append(f'<rect x="{xr}" y="{yb - hr}" width="{bw}" height="{hr}" fill="{cr}" rx="2"/>')
+        svg.append(f'<rect x="{xf}" y="{yb - hf}" width="{bw}" height="{hf}" fill="{cf}" rx="2"/>')
 
-        # Value labels
-        svg.append(f'<text x="{x_r + bar_w/2}" y="{y_base - h_r - 4}" text-anchor="middle" font-size="9" fill="{colors_r}">{rastqc_times[i]:.1f}s</text>')
-        svg.append(f'<text x="{x_f + bar_w/2}" y="{y_base - h_f - 4}" text-anchor="middle" font-size="9" fill="{colors_f}">{fastqc_times[i]:.1f}s</text>')
+        svg.append(f'<text x="{xr + bw/2}" y="{yb - hr - 4}" text-anchor="middle" font-size="9" fill="{cr}">{rastqc_times[i]:.1f}s</text>')
+        svg.append(f'<text x="{xf + bw/2}" y="{yb - hf - 4}" text-anchor="middle" font-size="9" fill="{cf}">{fastqc_times[i]:.1f}s</text>')
 
-        # X label
-        svg.append(f'<text x="{x_center}" y="{y_base + 18}" text-anchor="middle" font-size="11" fill="#333">{labels[i]}</text>')
+        speedup = fastqc_times[i] / rastqc_times[i]
+        svg.append(f'<text x="{xc}" y="{yb + 18}" text-anchor="middle" font-size="10" fill="#333">{labels[i]}</text>')
+        svg.append(f'<text x="{xc}" y="{yb + 32}" text-anchor="middle" font-size="9" fill="#888">{speedup:.1f}x</text>')
 
     # Axes
-    svg.append(f'<line x1="{margin_left}" y1="{margin_top}" x2="{margin_left}" y2="{margin_top + plot_h}" stroke="#333" stroke-width="1.5"/>')
-    svg.append(f'<line x1="{margin_left}" y1="{margin_top + plot_h}" x2="{margin_left + plot_w}" y2="{margin_top + plot_h}" stroke="#333" stroke-width="1.5"/>')
-
-    # Y axis label
-    svg.append(f'<text x="18" y="{margin_top + plot_h/2}" text-anchor="middle" font-size="12" fill="#333" transform="rotate(-90 18 {margin_top + plot_h/2})">Time (seconds)</text>')
+    svg.append(f'<line x1="{ml}" y1="{mt}" x2="{ml}" y2="{mt + ph}" stroke="#333" stroke-width="1.5"/>')
+    svg.append(f'<line x1="{ml}" y1="{mt + ph}" x2="{ml + pw}" y2="{mt + ph}" stroke="#333" stroke-width="1.5"/>')
+    svg.append(f'<text x="18" y="{mt + ph/2}" text-anchor="middle" font-size="12" fill="#333" transform="rotate(-90 18 {mt + ph/2})">Wall-Clock Time (seconds)</text>')
 
     # Legend
-    lx = w - margin_right + 10
-    ly = margin_top + 20
-    svg.append(f'<rect x="{lx}" y="{ly}" width="14" height="14" fill="{colors_r}" rx="2"/>')
+    lx = w - mr + 10
+    ly = mt + 20
+    svg.append(f'<rect x="{lx}" y="{ly}" width="14" height="14" fill="{cr}" rx="2"/>')
     svg.append(f'<text x="{lx + 20}" y="{ly + 12}" font-size="11" fill="#333">RastQC</text>')
-    svg.append(f'<rect x="{lx}" y="{ly + 22}" width="14" height="14" fill="{colors_f}" rx="2"/>')
+    svg.append(f'<rect x="{lx}" y="{ly + 22}" width="14" height="14" fill="{cf}" rx="2"/>')
     svg.append(f'<text x="{lx + 20}" y="{ly + 34}" font-size="11" fill="#333">FastQC</text>')
 
     svg.append('</svg>')
 
-    out_path = os.path.join(PAPER_DIR, "figures", "fig1_speed_comparison.svg")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "w") as f:
+    path = os.path.join(FIG_DIR, "fig1_short_read_speed.svg")
+    with open(path, "w") as f:
         f.write("\n".join(svg))
-    print(f"Figure 1 saved to {out_path}")
+    print(f"  Figure 1 saved: {path}")
 
 
-def generate_memory_figure():
-    """Generate SVG bar chart comparing memory usage."""
-    path = os.path.join(BENCH_DIR, "real_genomes", "real_genome_benchmarks.tsv")
-    rows = load_tsv(path)
+# ─── Figure 2: Long-Read Speed Comparison ───────────────────────────────────
 
-    organisms = ["fly", "yeast", "ecoli", "mouse", "human"]
-    labels = ["Fly", "Yeast", "E. coli", "Mouse", "Human"]
+def fig2_long_read_speed(rows):
+    long_rows = [r for r in rows if r["type"] == "long"]
+    files = []
+    seen = set()
+    for r in long_rows:
+        if r["file"] not in seen:
+            files.append(r["file"])
+            seen.add(r["file"])
 
-    rastqc_mem = []
-    fastqc_mem = []
-    for org in organisms:
-        r = [x for x in rows if x["Tool"] == "RastQC" and x["Organism"] == org][0]
-        f = [x for x in rows if x["Tool"] == "FastQC" and x["Organism"] == org][0]
-        rastqc_mem.append(int(r["RSS_bytes"]) / 1_048_576)
-        fastqc_mem.append(int(f["RSS_bytes"]) / 1_048_576)
+    labels = []
+    fastqc_t = []
+    rastqc_t = []
+    rastqc_lr_t = []
+    for fname in files:
+        fqc = [r for r in long_rows if r["file"] == fname and r["tool"] == "fastqc"]
+        rqc = [r for r in long_rows if r["file"] == fname and r["tool"] == "rastqc"]
+        rlr = [r for r in long_rows if r["file"] == fname and r["tool"] == "rastqc_lr"]
+        if fqc and rqc:
+            label = "ONT MinION" if "ont" in fname else "PacBio Revio"
+            labels.append(label)
+            fastqc_t.append(float(fqc[0]["real_sec"]))
+            rastqc_t.append(float(rqc[0]["real_sec"]))
+            rastqc_lr_t.append(float(rlr[0]["real_sec"]) if rlr else 0)
 
-    max_mem = max(max(fastqc_mem), 700)
+    max_time = max(max(fastqc_t), max(rastqc_t)) * 1.15
 
-    w, h = 700, 400
-    margin_left, margin_bottom, margin_top, margin_right = 80, 60, 40, 120
-    plot_w = w - margin_left - margin_right
-    plot_h = h - margin_top - margin_bottom
-    n = len(organisms)
-    group_w = plot_w / n
-    bar_w = group_w * 0.35
+    w, h = 500, 400
+    ml, mr, mt, mb = 80, 140, 40, 80
+    pw = w - ml - mr
+    ph = h - mt - mb
+    n = len(labels)
+    gw = pw / n
+    bw = gw * 0.25
 
     svg = []
     svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" font-family="Arial, sans-serif">')
     svg.append(f'<rect width="{w}" height="{h}" fill="white"/>')
+    svg.append(f'<text x="{w/2}" y="22" text-anchor="middle" font-size="14" font-weight="bold">Long-Read Performance: RastQC vs FastQC</text>')
 
+    y_max = int(max_time / 5 + 1) * 5
+    y_ticks = list(range(0, y_max + 1, max(y_max // 4, 1)))
+    for t in y_ticks:
+        y = mt + ph - (t / y_max * ph)
+        svg.append(f'<line x1="{ml}" y1="{y}" x2="{ml + pw}" y2="{y}" stroke="#e0e0e0" stroke-width="0.5"/>')
+        svg.append(f'<text x="{ml - 8}" y="{y + 4}" text-anchor="end" font-size="11" fill="#555">{t}s</text>')
+
+    cr, cf, clr = "#2980b9", "#e74c3c", "#27ae60"
+    for i in range(n):
+        xc = ml + gw * i + gw / 2
+        xr = xc - bw * 1.5 - 2
+        xf = xc - bw * 0.5
+        xlr = xc + bw * 0.5 + 2
+        yb = mt + ph
+
+        hr = (rastqc_t[i] / y_max) * ph
+        hf = (fastqc_t[i] / y_max) * ph
+        hlr = (rastqc_lr_t[i] / y_max) * ph if rastqc_lr_t[i] > 0 else 0
+
+        svg.append(f'<rect x="{xr}" y="{yb - hr}" width="{bw}" height="{hr}" fill="{cr}" rx="2"/>')
+        svg.append(f'<rect x="{xf}" y="{yb - hf}" width="{bw}" height="{hf}" fill="{cf}" rx="2"/>')
+        if hlr > 0:
+            svg.append(f'<rect x="{xlr}" y="{yb - hlr}" width="{bw}" height="{hlr}" fill="{clr}" rx="2"/>')
+
+        svg.append(f'<text x="{xr + bw/2}" y="{yb - hr - 4}" text-anchor="middle" font-size="8" fill="{cr}">{rastqc_t[i]:.1f}s</text>')
+        svg.append(f'<text x="{xf + bw/2}" y="{yb - hf - 4}" text-anchor="middle" font-size="8" fill="{cf}">{fastqc_t[i]:.1f}s</text>')
+        if rastqc_lr_t[i] > 0:
+            svg.append(f'<text x="{xlr + bw/2}" y="{yb - hlr - 4}" text-anchor="middle" font-size="8" fill="{clr}">{rastqc_lr_t[i]:.1f}s</text>')
+
+        speedup = fastqc_t[i] / rastqc_t[i]
+        svg.append(f'<text x="{xc}" y="{yb + 18}" text-anchor="middle" font-size="11" fill="#333">{labels[i]}</text>')
+        svg.append(f'<text x="{xc}" y="{yb + 32}" text-anchor="middle" font-size="9" fill="#888">{speedup:.1f}x faster</text>')
+
+    svg.append(f'<line x1="{ml}" y1="{mt}" x2="{ml}" y2="{mt + ph}" stroke="#333" stroke-width="1.5"/>')
+    svg.append(f'<line x1="{ml}" y1="{mt + ph}" x2="{ml + pw}" y2="{mt + ph}" stroke="#333" stroke-width="1.5"/>')
+    svg.append(f'<text x="18" y="{mt + ph/2}" text-anchor="middle" font-size="12" fill="#333" transform="rotate(-90 18 {mt + ph/2})">Wall-Clock Time (seconds)</text>')
+
+    lx = w - mr + 10
+    ly = mt + 20
+    svg.append(f'<rect x="{lx}" y="{ly}" width="14" height="14" fill="{cr}" rx="2"/>')
+    svg.append(f'<text x="{lx + 20}" y="{ly + 12}" font-size="10" fill="#333">RastQC</text>')
+    svg.append(f'<rect x="{lx}" y="{ly + 22}" width="14" height="14" fill="{cf}" rx="2"/>')
+    svg.append(f'<text x="{lx + 20}" y="{ly + 34}" font-size="10" fill="#333">FastQC</text>')
+    svg.append(f'<rect x="{lx}" y="{ly + 44}" width="14" height="14" fill="{clr}" rx="2"/>')
+    svg.append(f'<text x="{lx + 20}" y="{ly + 56}" font-size="10" fill="#333">RastQC +LR</text>')
+
+    svg.append('</svg>')
+
+    path = os.path.join(FIG_DIR, "fig2_long_read_speed.svg")
+    with open(path, "w") as f:
+        f.write("\n".join(svg))
+    print(f"  Figure 2 saved: {path}")
+
+
+# ─── Figure 3: Memory Comparison ────────────────────────────────────────────
+
+def fig3_memory(rows):
+    # All per-file results (skip ALL_SHORT)
+    files_data = []
+    seen = set()
+    for r in rows:
+        if r["file"].startswith("ALL"):
+            continue
+        if r["file"] not in seen:
+            seen.add(r["file"])
+            fqc = [x for x in rows if x["file"] == r["file"] and x["tool"] == "fastqc"]
+            rqc = [x for x in rows if x["file"] == r["file"] and x["tool"] == "rastqc"]
+            if fqc and rqc:
+                label = r["file"].replace(".fastq.gz", "").replace("_", " ")
+                if len(label) > 18:
+                    label = label[:15] + "..."
+                files_data.append({
+                    "label": label,
+                    "type": r["type"],
+                    "fqc_rss": int(fqc[0]["max_rss_mb"]),
+                    "rqc_rss": int(rqc[0]["max_rss_mb"]),
+                })
+
+    n = len(files_data)
+    max_mem = max(max(d["fqc_rss"] for d in files_data), max(d["rqc_rss"] for d in files_data)) * 1.15
+
+    w, h = 800, 400
+    ml, mr, mt, mb = 80, 120, 40, 90
+    pw = w - ml - mr
+    ph = h - mt - mb
+    gw = pw / n
+    bw = gw * 0.35
+
+    svg = []
+    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" font-family="Arial, sans-serif">')
+    svg.append(f'<rect width="{w}" height="{h}" fill="white"/>')
     svg.append(f'<text x="{w/2}" y="22" text-anchor="middle" font-size="14" font-weight="bold">Peak Memory (RSS): RastQC vs FastQC</text>')
 
-    y_ticks = [0, 100, 200, 300, 400, 500, 600, 700]
-    for t in y_ticks:
-        y = margin_top + plot_h - (t / max(y_ticks) * plot_h)
-        svg.append(f'<line x1="{margin_left}" y1="{y}" x2="{margin_left + plot_w}" y2="{y}" stroke="#e0e0e0" stroke-width="0.5"/>')
-        svg.append(f'<text x="{margin_left - 8}" y="{y + 4}" text-anchor="end" font-size="11" fill="#555">{t}</text>')
+    y_max = int(max_mem / 200 + 1) * 200
+    for t in range(0, y_max + 1, max(y_max // 5, 1)):
+        y = mt + ph - (t / y_max * ph)
+        svg.append(f'<line x1="{ml}" y1="{y}" x2="{ml + pw}" y2="{y}" stroke="#e0e0e0" stroke-width="0.5"/>')
+        svg.append(f'<text x="{ml - 8}" y="{y + 4}" text-anchor="end" font-size="11" fill="#555">{t}</text>')
 
-    colors_r, colors_f = "#2980b9", "#e74c3c"
-    for i in range(n):
-        x_center = margin_left + group_w * i + group_w / 2
-        x_r = x_center - bar_w - 2
-        x_f = x_center + 2
-        y_base = margin_top + plot_h
+    cr, cf = "#2980b9", "#e74c3c"
+    for i, d in enumerate(files_data):
+        xc = ml + gw * i + gw / 2
+        xr = xc - bw - 2
+        xf = xc + 2
+        yb = mt + ph
 
-        h_r = (rastqc_mem[i] / max(y_ticks)) * plot_h
-        h_f = (fastqc_mem[i] / max(y_ticks)) * plot_h
+        hr = (d["rqc_rss"] / y_max) * ph
+        hf = (d["fqc_rss"] / y_max) * ph
 
-        svg.append(f'<rect x="{x_r}" y="{y_base - h_r}" width="{bar_w}" height="{h_r}" fill="{colors_r}" rx="2"/>')
-        svg.append(f'<rect x="{x_f}" y="{y_base - h_f}" width="{bar_w}" height="{h_f}" fill="{colors_f}" rx="2"/>')
+        svg.append(f'<rect x="{xr}" y="{yb - hr}" width="{bw}" height="{hr}" fill="{cr}" rx="2"/>')
+        svg.append(f'<rect x="{xf}" y="{yb - hf}" width="{bw}" height="{hf}" fill="{cf}" rx="2"/>')
 
-        svg.append(f'<text x="{x_r + bar_w/2}" y="{y_base - h_r - 4}" text-anchor="middle" font-size="9" fill="{colors_r}">{rastqc_mem[i]:.0f}</text>')
-        svg.append(f'<text x="{x_f + bar_w/2}" y="{y_base - h_f - 4}" text-anchor="middle" font-size="9" fill="{colors_f}">{fastqc_mem[i]:.0f}</text>')
+        svg.append(f'<text x="{xr + bw/2}" y="{yb - hr - 4}" text-anchor="middle" font-size="8" fill="{cr}">{d["rqc_rss"]}</text>')
+        svg.append(f'<text x="{xf + bw/2}" y="{yb - hf - 4}" text-anchor="middle" font-size="8" fill="{cf}">{d["fqc_rss"]}</text>')
 
-        ratio = fastqc_mem[i] / rastqc_mem[i] if rastqc_mem[i] > 0 else 0
-        svg.append(f'<text x="{x_center}" y="{y_base + 18}" text-anchor="middle" font-size="11" fill="#333">{labels[i]}</text>')
-        svg.append(f'<text x="{x_center}" y="{y_base + 32}" text-anchor="middle" font-size="9" fill="#888">{ratio:.0f}x less</text>')
+        svg.append(f'<text x="{xc}" y="{yb + 16}" text-anchor="middle" font-size="9" fill="#333">{d["label"]}</text>')
+        tag = "(LR)" if d["type"] == "long" else ""
+        if tag:
+            svg.append(f'<text x="{xc}" y="{yb + 28}" text-anchor="middle" font-size="8" fill="#888">{tag}</text>')
 
-    svg.append(f'<line x1="{margin_left}" y1="{margin_top}" x2="{margin_left}" y2="{margin_top + plot_h}" stroke="#333" stroke-width="1.5"/>')
-    svg.append(f'<line x1="{margin_left}" y1="{margin_top + plot_h}" x2="{margin_left + plot_w}" y2="{margin_top + plot_h}" stroke="#333" stroke-width="1.5"/>')
+    svg.append(f'<line x1="{ml}" y1="{mt}" x2="{ml}" y2="{mt + ph}" stroke="#333" stroke-width="1.5"/>')
+    svg.append(f'<line x1="{ml}" y1="{mt + ph}" x2="{ml + pw}" y2="{mt + ph}" stroke="#333" stroke-width="1.5"/>')
+    svg.append(f'<text x="18" y="{mt + ph/2}" text-anchor="middle" font-size="12" fill="#333" transform="rotate(-90 18 {mt + ph/2})">Memory (MB)</text>')
 
-    svg.append(f'<text x="18" y="{margin_top + plot_h/2}" text-anchor="middle" font-size="12" fill="#333" transform="rotate(-90 18 {margin_top + plot_h/2})">Memory (MB)</text>')
-
-    lx = w - margin_right + 10
-    ly = margin_top + 20
-    svg.append(f'<rect x="{lx}" y="{ly}" width="14" height="14" fill="{colors_r}" rx="2"/>')
+    lx = w - mr + 10
+    ly = mt + 20
+    svg.append(f'<rect x="{lx}" y="{ly}" width="14" height="14" fill="{cr}" rx="2"/>')
     svg.append(f'<text x="{lx + 20}" y="{ly + 12}" font-size="11" fill="#333">RastQC</text>')
-    svg.append(f'<rect x="{lx}" y="{ly + 22}" width="14" height="14" fill="{colors_f}" rx="2"/>')
+    svg.append(f'<rect x="{lx}" y="{ly + 22}" width="14" height="14" fill="{cf}" rx="2"/>')
     svg.append(f'<text x="{lx + 20}" y="{ly + 34}" font-size="11" fill="#333">FastQC</text>')
 
     svg.append('</svg>')
 
-    out_path = os.path.join(PAPER_DIR, "figures", "fig2_memory_comparison.svg")
-    with open(out_path, "w") as f:
+    path = os.path.join(FIG_DIR, "fig3_memory_comparison.svg")
+    with open(path, "w") as f:
         f.write("\n".join(svg))
-    print(f"Figure 2 saved to {out_path}")
-
-
-def generate_startup_figure():
-    """Generate SVG showing startup time comparison."""
-    path = os.path.join(BENCH_DIR, "benchmark_results_v2.tsv")
-    rows = load_tsv(path)
-
-    datasets = ["startup", "100K", "1M", "1M_gz"]
-    labels = ["Startup\n(1 read)", "100K\nreads", "1M\nreads", "1M\ngzipped"]
-
-    rastqc_times = []
-    fastqc_times = []
-    for ds in datasets:
-        r = [x for x in rows if x["Tool"] == "RastQC" and x["Dataset"] == ds]
-        f = [x for x in rows if x["Tool"] == "FastQC" and x["Dataset"] == ds]
-        if r and f:
-            rastqc_times.append(float(r[0]["Time_s"]))
-            fastqc_times.append(float(f[0]["Time_s"]))
-
-    max_time = max(max(fastqc_times), 10)
-
-    w, h = 600, 380
-    margin_left, margin_bottom, margin_top, margin_right = 70, 70, 40, 120
-    plot_w = w - margin_left - margin_right
-    plot_h = h - margin_top - margin_bottom
-    n = len(datasets)
-    group_w = plot_w / n
-    bar_w = group_w * 0.35
-
-    svg = []
-    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" font-family="Arial, sans-serif">')
-    svg.append(f'<rect width="{w}" height="{h}" fill="white"/>')
-    svg.append(f'<text x="{w/2}" y="22" text-anchor="middle" font-size="14" font-weight="bold">Synthetic Benchmarks: RastQC vs FastQC</text>')
-
-    y_ticks = [0, 2, 4, 6, 8, 10]
-    for t in y_ticks:
-        y = margin_top + plot_h - (t / max(y_ticks) * plot_h)
-        svg.append(f'<line x1="{margin_left}" y1="{y}" x2="{margin_left + plot_w}" y2="{y}" stroke="#e0e0e0" stroke-width="0.5"/>')
-        svg.append(f'<text x="{margin_left - 8}" y="{y + 4}" text-anchor="end" font-size="11" fill="#555">{t}s</text>')
-
-    colors_r, colors_f = "#2980b9", "#e74c3c"
-    display_labels = ["Startup", "100K", "1M", "1M gz"]
-    for i in range(n):
-        x_center = margin_left + group_w * i + group_w / 2
-        x_r = x_center - bar_w - 2
-        x_f = x_center + 2
-        y_base = margin_top + plot_h
-
-        rt = min(rastqc_times[i], max(y_ticks))
-        ft = min(fastqc_times[i], max(y_ticks))
-        h_r = (rt / max(y_ticks)) * plot_h
-        h_f = (ft / max(y_ticks)) * plot_h
-
-        svg.append(f'<rect x="{x_r}" y="{y_base - h_r}" width="{bar_w}" height="{max(h_r, 2)}" fill="{colors_r}" rx="2"/>')
-        svg.append(f'<rect x="{x_f}" y="{y_base - h_f}" width="{bar_w}" height="{max(h_f, 2)}" fill="{colors_f}" rx="2"/>')
-
-        rt_label = f"{rastqc_times[i]*1000:.0f}ms" if rastqc_times[i] < 0.1 else f"{rastqc_times[i]:.1f}s"
-        ft_label = f"{fastqc_times[i]:.1f}s"
-        svg.append(f'<text x="{x_r + bar_w/2}" y="{y_base - h_r - 4}" text-anchor="middle" font-size="8" fill="{colors_r}">{rt_label}</text>')
-        svg.append(f'<text x="{x_f + bar_w/2}" y="{y_base - h_f - 4}" text-anchor="middle" font-size="8" fill="{colors_f}">{ft_label}</text>')
-
-        svg.append(f'<text x="{x_center}" y="{y_base + 18}" text-anchor="middle" font-size="11" fill="#333">{display_labels[i]}</text>')
-
-    svg.append(f'<line x1="{margin_left}" y1="{margin_top}" x2="{margin_left}" y2="{margin_top + plot_h}" stroke="#333" stroke-width="1.5"/>')
-    svg.append(f'<line x1="{margin_left}" y1="{margin_top + plot_h}" x2="{margin_left + plot_w}" y2="{margin_top + plot_h}" stroke="#333" stroke-width="1.5"/>')
-    svg.append(f'<text x="18" y="{margin_top + plot_h/2}" text-anchor="middle" font-size="12" fill="#333" transform="rotate(-90 18 {margin_top + plot_h/2})">Time (seconds)</text>')
-
-    lx = w - margin_right + 10
-    ly = margin_top + 20
-    svg.append(f'<rect x="{lx}" y="{ly}" width="14" height="14" fill="{colors_r}" rx="2"/>')
-    svg.append(f'<text x="{lx + 20}" y="{ly + 12}" font-size="11" fill="#333">RastQC</text>')
-    svg.append(f'<rect x="{lx}" y="{ly + 22}" width="14" height="14" fill="{colors_f}" rx="2"/>')
-    svg.append(f'<text x="{lx + 20}" y="{ly + 34}" font-size="11" fill="#333">FastQC</text>')
-
-    svg.append('</svg>')
-
-    out_path = os.path.join(PAPER_DIR, "figures", "fig3_synthetic_benchmarks.svg")
-    with open(out_path, "w") as f:
-        f.write("\n".join(svg))
-    print(f"Figure 3 saved to {out_path}")
+    print(f"  Figure 3 saved: {path}")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("=" * 70)
-    print("RastQC Benchmark Analysis")
-    print("=" * 70)
-    print()
+    if not os.path.exists(CSV_PATH):
+        print(f"ERROR: Benchmark results not found at {CSV_PATH}")
+        print("Run benchmark/run_benchmark.sh first.")
+        sys.exit(1)
 
-    generate_synthetic_table()
-    generate_real_genome_table()
-    generate_concordance_table()
+    os.makedirs(FIG_DIR, exist_ok=True)
+    rows = load_results()
 
-    print("=" * 70)
-    print("Generating figures...")
-    print("=" * 70)
-    generate_speedup_figure()
-    generate_memory_figure()
-    generate_startup_figure()
+    print("=" * 60)
+    print("RastQC Benchmark Figure Generation")
+    print(f"Source: {CSV_PATH}")
+    print("=" * 60)
 
-    print()
-    print("Done. Tables printed above; figures saved to paper/figures/")
+    # Print summary tables
+    print("\n━━━ SHORT-READ RESULTS ━━━")
+    print(f"{'File':<30} {'Size':>6} {'FastQC':>9} {'RastQC':>9} {'Speedup':>8} {'FQC MB':>7} {'RQC MB':>7}")
+    for r in rows:
+        if r["type"] == "short" and r["tool"] == "fastqc":
+            fqc = r
+            rqc = [x for x in rows if x["file"] == r["file"] and x["tool"] == "rastqc"]
+            if rqc:
+                rqc = rqc[0]
+                ft = float(fqc["real_sec"])
+                rt = float(rqc["real_sec"])
+                sp = ft / rt if rt > 0 else 0
+                print(f"{r['file']:<30} {r['size_mb']:>5}M {ft:>8.2f}s {rt:>8.2f}s {sp:>7.1f}x {fqc['max_rss_mb']:>6}M {rqc['max_rss_mb']:>6}M")
+
+    long_rows = [r for r in rows if r["type"] == "long"]
+    if long_rows:
+        print("\n━━━ LONG-READ RESULTS ━━━")
+        print(f"{'File':<35} {'FastQC':>9} {'RastQC':>9} {'RQC+LR':>9} {'Speedup':>8}")
+        seen = set()
+        for r in long_rows:
+            if r["file"] in seen:
+                continue
+            seen.add(r["file"])
+            fqc = [x for x in long_rows if x["file"] == r["file"] and x["tool"] == "fastqc"]
+            rqc = [x for x in long_rows if x["file"] == r["file"] and x["tool"] == "rastqc"]
+            rlr = [x for x in long_rows if x["file"] == r["file"] and x["tool"] == "rastqc_lr"]
+            if fqc and rqc:
+                ft = float(fqc[0]["real_sec"])
+                rt = float(rqc[0]["real_sec"])
+                lt = float(rlr[0]["real_sec"]) if rlr else 0
+                sp = ft / rt if rt > 0 else 0
+                lt_str = f"{lt:>8.2f}s" if lt > 0 else "       -"
+                print(f"{r['file']:<35} {ft:>8.2f}s {rt:>8.2f}s {lt_str} {sp:>7.1f}x")
+
+    print("\nGenerating figures...")
+    fig1_short_read_speed(rows)
+    fig2_long_read_speed(rows)
+    fig3_memory(rows)
+    print("\nDone.")

@@ -33,8 +33,11 @@ impl PerBaseContent {
         }
     }
 
+    const MAX_TRACKED_POSITIONS: usize = 1000;
+
     fn ensure_length(&mut self, len: usize) {
-        while self.a_counts.len() < len {
+        let target = len.min(Self::MAX_TRACKED_POSITIONS);
+        while self.a_counts.len() < target {
             self.a_counts.push(0);
             self.t_counts.push(0);
             self.g_counts.push(0);
@@ -53,8 +56,9 @@ impl QCModule for PerBaseContent {
     }
 
     fn process_sequence(&mut self, seq: &Sequence) {
-        self.ensure_length(seq.len());
-        for (i, &b) in seq.sequence.iter().enumerate() {
+        let len = seq.len().min(Self::MAX_TRACKED_POSITIONS);
+        self.ensure_length(len);
+        for (i, &b) in seq.sequence[..len].iter().enumerate() {
             match b {
                 b'A' | b'a' => self.a_counts[i] += 1,
                 b'T' | b't' => self.t_counts[i] += 1,
@@ -196,12 +200,23 @@ impl QCModule for PerBaseContent {
             mt + ph, ml + pw, mt + ph
         ));
 
-        // Y axis labels
+        // Y axis tick labels
         for v in (0..=100).step_by(20) {
             let y = mt + ph * (1.0 - v as f64 / 100.0);
             svg.push_str(&format!(
-                r##"<text x="{}" y="{}" text-anchor="end" dominant-baseline="middle" font-size="10">{}</text>"##,
+                r##"<text x="{}" y="{}" text-anchor="end" dominant-baseline="middle" font-size="10">{}%</text>"##,
                 ml - 5.0, y, v
+            ));
+        }
+
+        // X-axis tick labels
+        let step = (n / 15).max(1);
+        for i in (0..n).step_by(step) {
+            let x = ml + (i as f64 + 0.5) / n as f64 * pw;
+            let y = mt + ph + 15.0;
+            svg.push_str(&format!(
+                r##"<text x="{x}" y="{y}" text-anchor="end" transform="rotate(-45 {x} {y})" font-size="9">{}</text>"##,
+                self.groups[i].label()
             ));
         }
 
@@ -224,6 +239,20 @@ impl QCModule for PerBaseContent {
         svg.push_str(&format!(
             r##"<text x="{}" y="18" text-anchor="middle" font-size="13" font-weight="bold">Sequence content across all bases</text>"##,
             width / 2.0
+        ));
+
+        // Y axis label
+        svg.push_str(&format!(
+            r##"<text x="15" y="{}" text-anchor="middle" transform="rotate(-90 15 {})" font-size="11">Percentage (%)</text>"##,
+            mt + ph / 2.0,
+            mt + ph / 2.0
+        ));
+
+        // X axis label
+        svg.push_str(&format!(
+            r##"<text x="{}" y="{}" text-anchor="middle" font-size="11">Position in read (bp)</text>"##,
+            ml + pw / 2.0,
+            height - 5.0
         ));
 
         svg.push_str("</svg>");

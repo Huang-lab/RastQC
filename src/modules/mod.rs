@@ -308,6 +308,28 @@ mod tests {
     }
 }
 
+/// Format a numeric count for axis tick labels (e.g. 1500000 → "1.5M").
+pub fn format_count_label(n: f64) -> String {
+    if n >= 1_000_000.0 {
+        format!("{:.1}M", n / 1_000_000.0)
+    } else if n >= 1_000.0 {
+        format!("{:.1}K", n / 1_000.0)
+    } else if n == n.floor() {
+        format!("{}", n as u64)
+    } else {
+        format!("{:.1}", n)
+    }
+}
+
+/// Format a percentage value for axis tick labels.
+pub fn format_pct_label(n: f64) -> String {
+    if n == n.floor() {
+        format!("{}%", n as u64)
+    } else {
+        format!("{:.1}%", n)
+    }
+}
+
 /// Factory to create all modules
 pub struct ModuleFactory;
 

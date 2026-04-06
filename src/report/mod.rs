@@ -8,7 +8,7 @@ pub fn generate_html_report(filename: &str, modules: &[Box<dyn QCModule>]) -> St
 
     html.push_str("<!DOCTYPE html>\n<html>\n<head>\n");
     html.push_str(&format!(
-        "<title>FastQC Report: {}</title>\n",
+        "<title>RastQC Report: {}</title>\n",
         html_escape(filename)
     ));
     html.push_str("<meta charset=\"utf-8\">\n");
@@ -19,7 +19,7 @@ pub fn generate_html_report(filename: &str, modules: &[Box<dyn QCModule>]) -> St
 
     // Header
     html.push_str("<div id=\"header\">\n");
-    html.push_str("<h1>FastQC Report</h1>\n");
+    html.push_str("<h1>RastQC Report</h1>\n");
     html.push_str(&format!(
         "<h2>{}</h2>\n",
         html_escape(filename)
@@ -255,7 +255,7 @@ pub fn generate_summary_html(summaries: &[FileSummary]) -> String {
     let mut html = String::with_capacity(16 * 1024);
 
     html.push_str("<!DOCTYPE html>\n<html>\n<head>\n");
-    html.push_str("<title>FastQC Summary</title>\n");
+    html.push_str("<title>RastQC Summary</title>\n");
     html.push_str("<meta charset=\"utf-8\">\n");
     html.push_str("<style>\n");
     html.push_str(SUMMARY_CSS);
@@ -264,7 +264,7 @@ pub fn generate_summary_html(summaries: &[FileSummary]) -> String {
 
     // Header
     html.push_str("<div class=\"header\">\n");
-    html.push_str("<h1>FastQC Summary</h1>\n");
+    html.push_str("<h1>RastQC Summary</h1>\n");
     html.push_str(&format!(
         "<p>{} samples analysed</p>\n",
         summaries.len()

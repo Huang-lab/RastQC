@@ -164,7 +164,7 @@ fn test_multiple_files_summary() {
     assert!(summary_html.exists(), "summary.html not created");
 
     let html = fs::read_to_string(&summary_html).unwrap();
-    assert!(html.contains("FastQC Summary"));
+    assert!(html.contains("RastQC Summary"));
     assert!(html.contains("a.fastq"));
     assert!(html.contains("b.fastq"));
 
@@ -184,7 +184,7 @@ fn test_text_data_modules_present() {
     ]);
 
     let output = Command::new(binary_path())
-        .args(["--extract", "--quiet", "-o"])
+        .args(["--extract", "--quiet", "--long-read", "-o"])
         .arg(&outdir)
         .arg(&input)
         .output()
@@ -195,7 +195,7 @@ fn test_text_data_modules_present() {
     let data_path = outdir.join("test_fastqc/fastqc_data.txt");
     let data = fs::read_to_string(&data_path).unwrap();
 
-    // Verify all expected modules are present
+    // Verify all expected modules are present (12 core + 3 long-read with --long-read)
     assert!(data.contains(">>Basic Statistics"));
     assert!(data.contains(">>Per base sequence quality"));
     assert!(data.contains(">>Per tile sequence quality"));

@@ -75,6 +75,8 @@ impl QCModule for KmerContent {
         if len < self.kmer_size {
             return;
         }
+        // Cap tracked positions to avoid memory blowup on long reads
+        let len = len.min(1000);
         if len > self.max_length {
             self.max_length = len;
         }

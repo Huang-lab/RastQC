@@ -1,6 +1,6 @@
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{QCModule, QCResult};
+use super::{QCModule, QCResult, format_pct_label};
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -266,6 +266,18 @@ impl QCModule for DuplicationLevel {
             mt + ph, ml + pw, mt + ph
         ));
 
+        // Y-axis ticks
+        let y_steps = 5;
+        for i in 0..=y_steps {
+            let frac = i as f64 / y_steps as f64;
+            let val = max_pct * frac;
+            let y = mt + ph * (1.0 - frac);
+            svg.push_str(&format!(
+                r##"<text x="{}" y="{}" text-anchor="end" dominant-baseline="middle" font-size="10">{}</text>"##,
+                ml - 5.0, y, format_pct_label(val)
+            ));
+        }
+
         // X labels
         for i in 0..n {
             let x = ml + (i as f64 + 0.5) / n as f64 * pw;
@@ -280,6 +292,20 @@ impl QCModule for DuplicationLevel {
         svg.push_str(&format!(
             r##"<text x="{}" y="18" text-anchor="middle" font-size="13" font-weight="bold">Sequence Duplication Levels [{:.2}% remaining after dedup]</text>"##,
             width / 2.0, self.percent_different
+        ));
+
+        // Y axis label
+        svg.push_str(&format!(
+            r##"<text x="15" y="{}" text-anchor="middle" transform="rotate(-90 15 {})" font-size="11">% of sequences</text>"##,
+            mt + ph / 2.0,
+            mt + ph / 2.0
+        ));
+
+        // X axis label
+        svg.push_str(&format!(
+            r##"<text x="{}" y="{}" text-anchor="middle" font-size="11">Sequence Duplication Level</text>"##,
+            ml + pw / 2.0,
+            height - 5.0
         ));
 
         svg.push_str("</svg>");

@@ -89,8 +89,14 @@ impl PerBaseQuality {
         }
     }
 
+    /// Maximum number of positions to track individually.
+    /// Beyond this, per-position data would be grouped anyway for display.
+    /// Capping here saves ~100MB/worker for long reads with 100kb+ sequences.
+    const MAX_TRACKED_POSITIONS: usize = 1000;
+
     fn ensure_length(&mut self, len: usize) {
-        while self.quality_counts.len() < len {
+        let target = len.min(Self::MAX_TRACKED_POSITIONS);
+        while self.quality_counts.len() < target {
             self.quality_counts.push(QualityCount::new());
         }
     }
@@ -106,8 +112,9 @@ impl QCModule for PerBaseQuality {
     }
 
     fn process_sequence(&mut self, seq: &Sequence) {
-        self.ensure_length(seq.quality.len());
-        for (i, &q) in seq.quality.iter().enumerate() {
+        let len = seq.quality.len().min(Self::MAX_TRACKED_POSITIONS);
+        self.ensure_length(len);
+        for (i, &q) in seq.quality[..len].iter().enumerate() {
             self.quality_counts[i].add(q);
         }
     }

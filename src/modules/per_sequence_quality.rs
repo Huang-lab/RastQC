@@ -1,6 +1,6 @@
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{PhredEncoding, QCModule, QCResult};
+use super::{PhredEncoding, QCModule, QCResult, format_count_label};
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -160,10 +160,52 @@ impl QCModule for PerSequenceQuality {
             mt + ph, ml + pw, mt + ph
         ));
 
+        // Y-axis ticks
+        let y_steps = 5;
+        for i in 0..=y_steps {
+            let frac = i as f64 / y_steps as f64;
+            let val = max_count * frac;
+            let y = mt + ph * (1.0 - frac);
+            svg.push_str(&format!(
+                r##"<text x="{}" y="{}" text-anchor="end" dominant-baseline="middle" font-size="10">{}</text>"##,
+                ml - 5.0, y, format_count_label(val)
+            ));
+        }
+
+        // X-axis ticks
+        {
+            let step = ((max_score - min_score) / 10.0).max(1.0).ceil() as u32;
+            let mut v = (min_score as u32 / step) * step;
+            while v <= max_score as u32 {
+                if v >= min_score as u32 {
+                    let x = ml + (v as f64 - min_score) / score_range * pw;
+                    svg.push_str(&format!(
+                        r##"<text x="{}" y="{}" text-anchor="middle" font-size="10">{}</text>"##,
+                        x, mt + ph + 15.0, v
+                    ));
+                }
+                v += step;
+            }
+        }
+
         // Title
         svg.push_str(&format!(
             r##"<text x="{}" y="18" text-anchor="middle" font-size="13" font-weight="bold">Quality score distribution over all sequences</text>"##,
             width / 2.0
+        ));
+
+        // Y axis label
+        svg.push_str(&format!(
+            r##"<text x="15" y="{}" text-anchor="middle" transform="rotate(-90 15 {})" font-size="11">Count</text>"##,
+            mt + ph / 2.0,
+            mt + ph / 2.0
+        ));
+
+        // X axis label
+        svg.push_str(&format!(
+            r##"<text x="{}" y="{}" text-anchor="middle" font-size="11">Mean Sequence Quality (Phred Score)</text>"##,
+            ml + pw / 2.0,
+            height - 5.0
         ));
 
         svg.push_str("</svg>");

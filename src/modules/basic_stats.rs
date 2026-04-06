@@ -204,7 +204,7 @@ mod tests {
     }
 
     fn default_config() -> FastQCConfig {
-        FastQCConfig::new(None, None, None, 7, false, 50).unwrap()
+        FastQCConfig::new(None, None, None, 7, false, 50, false).unwrap()
     }
 
     #[test]

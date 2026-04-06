@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" font-family="Arial, sans-serif">
+<rect width="800" height="400" fill="white"/>
+<text x="400.0" y="22" text-anchor="middle" font-size="14" font-weight="bold">Peak Memory (RSS): RastQC vs FastQC</text>
+<line x1="80" y1="310.0" x2="680" y2="310.0" stroke="#e0e0e0" stroke-width="0.5"/>
+<text x="72" y="314.0" text-anchor="end" font-size="11" fill="#555">0</text>
+<line x1="80" y1="256.0" x2="680" y2="256.0" stroke="#e0e0e0" stroke-width="0.5"/>
+<text x="72" y="260.0" text-anchor="end" font-size="11" fill="#555">320</text>
+<line x1="80" y1="202.0" x2="680" y2="202.0" stroke="#e0e0e0" stroke-width="0.5"/>
+<text x="72" y="206.0" text-anchor="end" font-size="11" fill="#555">640</text>
+<line x1="80" y1="148.0" x2="680" y2="148.0" stroke="#e0e0e0" stroke-width="0.5"/>
+<text x="72" y="152.0" text-anchor="end" font-size="11" fill="#555">960</text>
+<line x1="80" y1="94.0" x2="680" y2="94.0" stroke="#e0e0e0" stroke-width="0.5"/>
+<text x="72" y="98.0" text-anchor="end" font-size="11" fill="#555">1280</text>
+<line x1="80" y1="40.0" x2="680" y2="40.0" stroke="#e0e0e0" stroke-width="0.5"/>
+<text x="72" y="44.0" text-anchor="end" font-size="11" fill="#555">1600</text>
+<rect x="90.85714285714286" y="256.84375" width="29.999999999999996" height="53.15625" fill="#2980b9" rx="2"/>
+<rect x="124.85714285714286" y="236.7625" width="29.999999999999996" height="73.2375" fill="#e74c3c" rx="2"/>
+<text x="105.85714285714286" y="252.84375" text-anchor="middle" font-size="8" fill="#2980b9">315</text>
+<text x="139.85714285714286" y="232.7625" text-anchor="middle" font-size="8" fill="#e74c3c">434</text>
+<text x="122.85714285714286" y="326" text-anchor="middle" font-size="9" fill="#333">DRR013000 1</text>
+<rect x="176.57142857142858" y="301.73125" width="29.999999999999996" height="8.26875" fill="#2980b9" rx="2"/>
+<rect x="210.57142857142858" y="238.28125" width="29.999999999999996" height="71.71875" fill="#e74c3c" rx="2"/>
+<text x="191.57142857142858" y="297.73125" text-anchor="middle" font-size="8" fill="#2980b9">49</text>
+<text x="225.57142857142858" y="234.28125" text-anchor="middle" font-size="8" fill="#e74c3c">425</text>
+<text x="208.57142857142858" y="326" text-anchor="middle" font-size="9" fill="#333">DRR609229 1</text>
+<rect x="262.2857142857143" y="301.5625" width="29.999999999999996" height="8.4375" fill="#2980b9" rx="2"/>
+<rect x="296.2857142857143" y="238.45" width="29.999999999999996" height="71.55" fill="#e74c3c" rx="2"/>
+<text x="277.2857142857143" y="297.5625" text-anchor="middle" font-size="8" fill="#2980b9">50</text>
+<text x="311.2857142857143" y="234.45" text-anchor="middle" font-size="8" fill="#e74c3c">424</text>
+<text x="294.2857142857143" y="326" text-anchor="middle" font-size="9" fill="#333">DRR609229 2</text>
+<rect x="347.99999999999994" y="253.975" width="29.999999999999996" height="56.025" fill="#2980b9" rx="2"/>
+<rect x="381.99999999999994" y="234.7375" width="29.999999999999996" height="75.2625" fill="#e74c3c" rx="2"/>
+<text x="362.99999999999994" y="249.975" text-anchor="middle" font-size="8" fill="#2980b9">332</text>
+<text x="396.99999999999994" y="230.7375" text-anchor="middle" font-size="8" fill="#e74c3c">446</text>
+<text x="379.99999999999994" y="326" text-anchor="middle" font-size="9" fill="#333">ERR5897746 1</text>
+<rect x="433.71428571428567" y="254.3125" width="29.999999999999996" height="55.6875" fill="#2980b9" rx="2"/>
+<rect x="467.71428571428567" y="235.4125" width="29.999999999999996" height="74.5875" fill="#e74c3c" rx="2"/>
+<text x="448.71428571428567" y="250.3125" text-anchor="middle" font-size="8" fill="#2980b9">330</text>
+<text x="482.71428571428567" y="231.4125" text-anchor="middle" font-size="8" fill="#e74c3c">442</text>
+<text x="465.71428571428567" y="326" text-anchor="middle" font-size="9" fill="#333">ERR5897746 2</text>
+<rect x="519.4285714285714" y="97.88125" width="29.999999999999996" height="212.11875" fill="#2980b9" rx="2"/>
+<rect x="553.4285714285714" y="165.88750000000002" width="29.999999999999996" height="144.11249999999998" fill="#e74c3c" rx="2"/>
+<text x="534.4285714285714" y="93.88125" text-anchor="middle" font-size="8" fill="#2980b9">1257</text>
+<text x="568.4285714285714" y="161.88750000000002" text-anchor="middle" font-size="8" fill="#e74c3c">854</text>
+<text x="551.4285714285714" y="326" text-anchor="middle" font-size="9" fill="#333">DRR242198 ont e...</text>
+<text x="551.4285714285714" y="338" text-anchor="middle" font-size="8" fill="#888">(LR)</text>
+<rect x="605.1428571428571" y="196.9375" width="29.999999999999996" height="113.0625" fill="#2980b9" rx="2"/>
+<rect x="639.1428571428571" y="191.53750000000002" width="29.999999999999996" height="118.46249999999999" fill="#e74c3c" rx="2"/>
+<text x="620.1428571428571" y="192.9375" text-anchor="middle" font-size="8" fill="#2980b9">670</text>
+<text x="654.1428571428571" y="187.53750000000002" text-anchor="middle" font-size="8" fill="#e74c3c">702</text>
+<text x="637.1428571428571" y="326" text-anchor="middle" font-size="9" fill="#333">DRR723651 pacbi...</text>
+<text x="637.1428571428571" y="338" text-anchor="middle" font-size="8" fill="#888">(LR)</text>
+<line x1="80" y1="40" x2="80" y2="310" stroke="#333" stroke-width="1.5"/>
+<line x1="80" y1="310" x2="680" y2="310" stroke="#333" stroke-width="1.5"/>
+<text x="18" y="175.0" text-anchor="middle" font-size="12" fill="#333" transform="rotate(-90 18 175.0)">Memory (MB)</text>
+<rect x="690" y="60" width="14" height="14" fill="#2980b9" rx="2"/>
+<text x="710" y="72" font-size="11" fill="#333">RastQC</text>
+<rect x="690" y="82" width="14" height="14" fill="#e74c3c" rx="2"/>
+<text x="710" y="94" font-size="11" fill="#333">FastQC</text>
+</svg>

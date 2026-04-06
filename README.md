@@ -92,6 +92,8 @@ Options:
       --exit-code               Return QC-aware exit codes: 0=pass, 1=warn, 2=fail
       --serve                   Start web server to browse reports
       --port <N>                Web server port [default: 8080]
+      --long-read               Enable long-read QC modules (auto-enabled for Fast5/POD5 inputs)
+      --time                    Show per-file and per-step timing breakdown
       --no-parallel             Disable streaming intra-file parallelism (on by default for >50MB files)
   -q, --quiet                   Suppress progress output
       --dup-length <N>          Truncation length for duplication detection [default: 50]
@@ -179,11 +181,11 @@ When processing multiple files with `--summary`:
 | 10 | **Overrepresented Sequences** | Frequently occurring sequences + contaminant matching | Any seq > 0.1% (warn) / > 1% (fail) |
 | 11 | **Adapter Content** | Known adapter sequence contamination | > 5% (warn) / > 10% (fail) |
 | 12 | **Kmer Content** | Positionally biased k-mers | -log10(p) > 2 (warn) / > 5 (fail) |
-| 13 | **Read Length N50** | N50, N90, mean, median, min, max lengths | Informational only |
-| 14 | **Quality Stratified Length** | Length distribution by quality tier (Q<10 to Q40+) | >50% below Q20 (warn) |
-| 15 | **Homopolymer Content** | Homopolymer run frequency by base and length | >5% bases in runs (warn) / >10% (fail) |
+| 13 | **Read Length N50** (Long Read) | N50, N90, mean, median, min, max lengths | Informational only |
+| 14 | **Quality Stratified Length** (Long Read) | Length distribution by quality tier (Q<10 to Q40+) | >50% below Q20 (warn) |
+| 15 | **Homopolymer Content** (Long Read) | Homopolymer run frequency by base and length | >5% bases in runs (warn) / >10% (fail) |
 
-Modules 13--15 are RastQC-exclusive, designed for long-read sequencing data (PacBio HiFi, Oxford Nanopore).
+Modules 13--15 are RastQC-exclusive, designed for long-read sequencing data (PacBio HiFi, Oxford Nanopore). These modules are **disabled by default** and enabled with `--long-read` or automatically when processing Fast5/POD5 files. Their thresholds are calibrated for long-read error profiles and would produce false positives on short-read Illumina data.
 
 ## Working with many files
 
@@ -270,29 +272,49 @@ RastQC produces output compatible with tools that consume FastQC results:
 
 ## Performance
 
-Benchmarked on real human whole-exome sequencing data (ENA/SRA), 4 threads, macOS ARM64:
+Benchmarked on real sequencing data (ENA/SRA), 4 threads, macOS ARM64:
 
-| File | Size | FastQC 0.12.1 | RastQC | Speedup |
-|------|------|---------------|--------|---------|
-| DRR609229 R1 | 22 MB | 3.5s | **2.0s** | 1.7x |
-| DRR609229 R2 | 23 MB | 3.4s | **2.0s** | 1.7x |
-| ERR5897746 R1 | 320 MB | 14.5s | **5.2s** | 2.8x |
-| ERR5897746 R2 | 327 MB | 15.5s | **5.1s** | 3.0x |
-| DRR013000 R1 | 1.4 GB | 56.7s | **19.7s** | 2.9x |
-| All 5 files | 2.1 GB | 60.8s | **26.6s** | 2.3x |
+### Short-read (Illumina)
+
+| File | Size | Reads | FastQC 0.12.1 | RastQC | Speedup |
+|------|------|-------|---------------|--------|---------|
+| DRR609229 R1 | 22 MB | 720K | 3.5s | **2.0s** | 1.8x |
+| DRR609229 R2 | 23 MB | 720K | 3.5s | **2.0s** | 1.7x |
+| ERR5897746 R1 | 320 MB | 4.3M | 15.6s | **4.8s** | 3.2x |
+| ERR5897746 R2 | 327 MB | 4.3M | 15.6s | **4.8s** | 3.2x |
+| DRR013000 R1 | 1.4 GB | 24.8M | 51.8s | **19.6s** | 2.6x |
+| All 5 files | 2.1 GB | 34.7M | 55.7s | **22.3s** | 2.5x |
+
+### Long-read (ONT / PacBio)
+
+| File | Platform | Size | Reads | Mean Length | FastQC | RastQC | Speedup |
+|------|----------|------|-------|-------------|--------|--------|---------|
+| DRR242198 | ONT MinION | 406 MB | 76K | 5.3 kb | 14.6s | **3.1s** | 4.7x |
+| DRR723651 | PacBio Revio | 281 MB | 42K | 18.8 kb | 17.6s | **2.7s** | 6.5x |
+
+The `--long-read` flag enables 3 additional QC modules with negligible overhead.
+
+### Resource comparison
 
 | Metric | RastQC | FastQC (Java) |
 |--------|--------|---------------|
 | Binary size | 2.1 MB | ~215 MB (with JRE) |
 | Startup time | <5 ms | ~2.5 s JVM warmup |
-| Peak memory (small files) | 54-57 MB | 420-427 MB |
-| Peak memory (1.4 GB file) | 740 MB | 421 MB |
+| Peak memory (small files) | 49-50 MB | 424-425 MB |
+| Peak memory (1.4 GB file) | 315 MB | 434 MB |
+| Peak memory (long reads) | 670-1257 MB | 702-854 MB |
 | Threading | streaming intra-file + multi-file parallel | per-file parallel |
-| Modules | 15 | 11 |
+| Modules | 12 core + 3 long-read | 11 |
 
-RastQC's streaming parallel pipeline automatically activates for files >50MB, using a bounded reader-worker architecture that scales with thread count without buffering the entire file in memory.
+RastQC's streaming parallel pipeline automatically activates for files >50MB, using a bounded reader-worker architecture with adaptive batch sizing that scales with thread count without buffering the entire file in memory.
 
 ---
+
+## Citation
+
+If you use RastQC in your research, please cite:
+
+> Huang KL. RastQC: A fast, Rust-based quality control tool for high-throughput sequencing data. *bioRxiv* (2026). [https://www.biorxiv.org/content/10.64898/2026.03.31.71563](https://www.biorxiv.org/content/10.64898/2026.03.31.71563)
 
 ## Acknowledgments
 

@@ -6,13 +6,15 @@ use crossbeam::channel;
 use std::path::Path;
 use std::thread;
 
-/// Batch size: number of sequences per chunk sent through the channel.
-/// Tuned for cache-friendly processing without excessive memory use.
-const BATCH_SIZE: usize = 16_384;
+/// Target bytes per batch (~4MB). Batch size is computed dynamically
+/// from the first few reads' average length so long reads don't blow up memory.
+const TARGET_BATCH_BYTES: usize = 4 * 1024 * 1024;
+
+/// Fallback batch size when read lengths are unknown.
+const DEFAULT_BATCH_SIZE: usize = 16_384;
 
 /// Channel capacity: number of batches buffered in the channel.
-/// Bounded to limit memory — at 16K seqs/batch this is ~2-3 batches ahead.
-const CHANNEL_CAPACITY: usize = 4;
+const CHANNEL_CAPACITY: usize = 2;
 
 /// Process a file using streaming parallelism.
 ///
@@ -36,23 +38,52 @@ pub fn process_file_parallel(
     let path_owned = path.to_path_buf();
     let reader_handle = thread::spawn(move || -> Result<()> {
         let mut reader = SequenceReader::open(&path_owned)?;
-        let mut batch = Vec::with_capacity(BATCH_SIZE);
 
-        while let Some(seq) = reader.next_sequence()? {
+        // Determine batch size from first reads' average length
+        let mut probe_reads: Vec<Sequence> = Vec::new();
+        let mut total_len: usize = 0;
+        while probe_reads.len() < 100 {
+            if let Some(seq) = reader.next_sequence()? {
+                total_len += seq.len();
+                probe_reads.push(seq);
+            } else {
+                break;
+            }
+        }
+
+        let batch_size = if probe_reads.is_empty() {
+            DEFAULT_BATCH_SIZE
+        } else {
+            let avg_len = (total_len / probe_reads.len()).max(1);
+            // ~4MB per batch, minimum 64 reads, maximum 16K reads
+            (TARGET_BATCH_BYTES / avg_len).clamp(64, DEFAULT_BATCH_SIZE)
+        };
+
+        // Send probe reads as the first batch
+        let mut batch = Vec::with_capacity(batch_size);
+        for seq in probe_reads {
             batch.push(seq);
-            if batch.len() >= BATCH_SIZE {
-                // If all receivers dropped, stop reading
+            if batch.len() >= batch_size {
                 if sender.send(batch).is_err() {
                     return Ok(());
                 }
-                batch = Vec::with_capacity(BATCH_SIZE);
+                batch = Vec::with_capacity(batch_size);
             }
         }
-        // Send remaining sequences
+
+        // Continue with remaining reads
+        while let Some(seq) = reader.next_sequence()? {
+            batch.push(seq);
+            if batch.len() >= batch_size {
+                if sender.send(batch).is_err() {
+                    return Ok(());
+                }
+                batch = Vec::with_capacity(batch_size);
+            }
+        }
         if !batch.is_empty() {
             let _ = sender.send(batch);
         }
-        // Channel closes when sender is dropped
         Ok(())
     });
 

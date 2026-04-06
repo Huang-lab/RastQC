@@ -28,6 +28,15 @@ pub struct FileSummary {
     pub module_results: Vec<(String, QCResult)>,
     pub total_sequences: u64,
     pub report_path: String,
+    pub timing: Option<FileTiming>,
+}
+
+/// Per-file timing breakdown.
+pub struct FileTiming {
+    pub read_and_qc_secs: f64,
+    pub report_gen_secs: f64,
+    pub io_write_secs: f64,
+    pub total_secs: f64,
 }
 
 #[derive(Parser, Debug)]
@@ -109,6 +118,15 @@ struct Cli {
     /// Disable intra-file parallelism (streaming parallel is on by default for files >50MB).
     #[arg(long)]
     no_parallel: bool,
+
+    /// Show per-file and per-step timing breakdown
+    #[arg(long)]
+    time: bool,
+
+    /// Enable long-read QC modules (Read Length N50, Quality Stratified Length,
+    /// Homopolymer Content). Auto-enabled for Fast5/POD5 inputs.
+    #[arg(long)]
+    long_read: bool,
 }
 
 fn num_cpus() -> usize {
@@ -139,14 +157,29 @@ fn run() -> Result<ExitCode> {
         anyhow::bail!("No input files specified. Pass file paths or use --stdin to read from standard input.");
     }
 
-    let config = FastQCConfig::new(
+    // Auto-detect long-read mode from file extensions
+    let long_read = cli.long_read
+        || cli.files.iter().any(|f| {
+            let name = f.to_string_lossy().to_lowercase();
+            name.ends_with(".fast5") || name.ends_with(".pod5")
+        });
+
+    let mut config = FastQCConfig::new(
         cli.contaminants.as_deref(),
         cli.adapters.as_deref(),
         cli.limits.as_deref(),
         cli.kmer_size,
         cli.nofilter,
         cli.dup_length,
+        long_read,
     )?;
+
+    if long_read {
+        config.enable_long_read_modules();
+        if !cli.quiet {
+            eprintln!("Long-read mode enabled: running Read Length N50, Quality Stratified Length, Homopolymer Content");
+        }
+    }
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(cli.threads)
@@ -171,15 +204,30 @@ fn run() -> Result<ExitCode> {
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 if !cli.quiet {
                     let status = summary_status_line(&summary);
-                    eprintln!(
-                        "[{}/{}] {} ({} seqs) {}  {:.1}s",
-                        done,
-                        total_files,
-                        summary.filename,
-                        format_count(summary.total_sequences),
-                        status,
-                        total_start.elapsed().as_secs_f64()
-                    );
+                    if let Some(ref t) = summary.timing {
+                        eprintln!(
+                            "[{}/{}] {} ({} seqs) {}  {:.2}s  [qc {:.2}s | report {:.3}s | io {:.3}s]",
+                            done,
+                            total_files,
+                            summary.filename,
+                            format_count(summary.total_sequences),
+                            status,
+                            t.total_secs,
+                            t.read_and_qc_secs,
+                            t.report_gen_secs,
+                            t.io_write_secs,
+                        );
+                    } else {
+                        eprintln!(
+                            "[{}/{}] {} ({} seqs) {}  {:.1}s",
+                            done,
+                            total_files,
+                            summary.filename,
+                            format_count(summary.total_sequences),
+                            status,
+                            total_start.elapsed().as_secs_f64()
+                        );
+                    }
                 }
                 summaries.lock().unwrap().push(summary);
             }
@@ -196,7 +244,7 @@ fn run() -> Result<ExitCode> {
 
     // Print final tally
     if !cli.quiet {
-        print_final_tally(&summaries, total_files, total_start.elapsed().as_secs_f64());
+        print_final_tally(&summaries, total_files, total_start.elapsed().as_secs_f64(), cli.time);
     }
 
     // Write multi-file summary if requested (or auto-enable for 2+ files)
@@ -245,9 +293,11 @@ fn process_file(
     config: &FastQCConfig,
     cli: &Cli,
 ) -> Result<FileSummary> {
+    let file_start = Instant::now();
     let is_stdin = file.as_os_str() == "-";
 
     // Choose between streaming parallel and sequential processing
+    let qc_start = Instant::now();
     let (qc_modules, count) = if !is_stdin && !cli.no_parallel && parallel::should_use_parallel(file) {
         parallel::process_file_parallel(file, config, cli.threads)?
     } else {
@@ -271,6 +321,7 @@ fn process_file(
         }
         (qc_modules, count)
     };
+    let read_and_qc_secs = qc_start.elapsed().as_secs_f64();
 
     // Determine output base name
     let filename = if is_stdin {
@@ -296,13 +347,23 @@ fn process_file(
         .collect();
 
     // Generate outputs
+    let report_start = Instant::now();
     let html = generate_html_report(&filename, &qc_modules);
     let text = generate_text_data(&filename, &qc_modules);
     let summary_txt = generate_summary_txt(&filename, &qc_modules);
 
     // Generate MultiQC JSON if requested
-    if cli.multiqc_json {
-        let json = generate_multiqc_json(&filename, &qc_modules);
+    let multiqc_json_str = if cli.multiqc_json {
+        Some(generate_multiqc_json(&filename, &qc_modules))
+    } else {
+        None
+    };
+    let report_gen_secs = report_start.elapsed().as_secs_f64();
+
+    // Write outputs
+    let io_start = Instant::now();
+
+    if let Some(json) = multiqc_json_str {
         let json_path = outdir.join(format!("{}_multiqc.json", stem));
         std::fs::write(&json_path, &json)?;
     }
@@ -329,12 +390,26 @@ fn process_file(
         let html_path = outdir.join(&report_path);
         std::fs::write(&html_path, &html)?;
     }
+    let io_write_secs = io_start.elapsed().as_secs_f64();
+    let total_secs = file_start.elapsed().as_secs_f64();
+
+    let timing = if cli.time {
+        Some(FileTiming {
+            read_and_qc_secs,
+            report_gen_secs,
+            io_write_secs,
+            total_secs,
+        })
+    } else {
+        None
+    };
 
     Ok(FileSummary {
         filename,
         module_results,
         total_sequences: count,
         report_path,
+        timing,
     })
 }
 
@@ -373,7 +448,7 @@ fn format_count(n: u64) -> String {
     }
 }
 
-fn print_final_tally(summaries: &[FileSummary], total_files: usize, elapsed: f64) {
+fn print_final_tally(summaries: &[FileSummary], total_files: usize, elapsed: f64, show_time: bool) {
     eprintln!();
     eprintln!("=== Analysis complete ===");
     eprintln!(
@@ -445,5 +520,45 @@ fn print_final_tally(summaries: &[FileSummary], total_files: usize, elapsed: f64
             }
         }
     }
+
+    // Timing breakdown
+    if show_time {
+        eprintln!();
+        eprintln!("--- Timing breakdown ---");
+        eprintln!("{:<35} {:>8} {:>8} {:>8} {:>8}", "File", "QC", "Report", "IO", "Total");
+        let mut sum_qc = 0.0_f64;
+        let mut sum_report = 0.0_f64;
+        let mut sum_io = 0.0_f64;
+        let mut sum_total = 0.0_f64;
+        for summary in summaries {
+            if let Some(ref t) = summary.timing {
+                eprintln!(
+                    "{:<35} {:>7.2}s {:>7.3}s {:>7.3}s {:>7.2}s",
+                    truncate_str(&summary.filename, 35),
+                    t.read_and_qc_secs,
+                    t.report_gen_secs,
+                    t.io_write_secs,
+                    t.total_secs,
+                );
+                sum_qc += t.read_and_qc_secs;
+                sum_report += t.report_gen_secs;
+                sum_io += t.io_write_secs;
+                sum_total += t.total_secs;
+            }
+        }
+        if summaries.len() > 1 {
+            eprintln!("{:<35} {:>7.2}s {:>7.3}s {:>7.3}s {:>7.2}s", "SUM (cpu-time)", sum_qc, sum_report, sum_io, sum_total);
+            eprintln!("Wall-clock: {:.2}s", elapsed);
+        }
+    }
+
     eprintln!();
+}
+
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("...{}", &s[s.len() - (max_len - 3)..])
+    }
 }

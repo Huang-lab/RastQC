@@ -1,6 +1,6 @@
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{BaseGroup, QCModule, QCResult};
+use super::{BaseGroup, QCModule, QCResult, format_pct_label};
 use std::any::Any;
 
 struct AdapterTracker {
@@ -44,8 +44,11 @@ impl AdapterContent {
         }
     }
 
+    const MAX_TRACKED_POSITIONS: usize = 1000;
+
     fn ensure_length(positions: &mut Vec<u64>, len: usize) {
-        while positions.len() < len {
+        let target = len.min(Self::MAX_TRACKED_POSITIONS);
+        while positions.len() < target {
             positions.push(0);
         }
     }
@@ -62,7 +65,7 @@ impl QCModule for AdapterContent {
 
     fn process_sequence(&mut self, seq: &Sequence) {
         self.total_count += 1;
-        let seq_len = seq.sequence.len();
+        let seq_len = seq.sequence.len().min(Self::MAX_TRACKED_POSITIONS);
         if seq_len > self.max_length {
             self.max_length = seq_len;
         }
@@ -229,6 +232,29 @@ impl QCModule for AdapterContent {
             mt + ph, ml + pw, mt + ph
         ));
 
+        // Y-axis ticks
+        let y_steps = 5;
+        for i in 0..=y_steps {
+            let frac = i as f64 / y_steps as f64;
+            let val = max_val * frac;
+            let y = mt + ph * (1.0 - frac);
+            svg.push_str(&format!(
+                r##"<text x="{}" y="{}" text-anchor="end" dominant-baseline="middle" font-size="10">{}</text>"##,
+                ml - 5.0, y, format_pct_label(val)
+            ));
+        }
+
+        // X-axis tick labels
+        let step = (n / 15).max(1);
+        for i in (0..n).step_by(step) {
+            let x = ml + (i as f64 + 0.5) / n as f64 * pw;
+            let y = mt + ph + 15.0;
+            svg.push_str(&format!(
+                r##"<text x="{x}" y="{y}" text-anchor="end" transform="rotate(-45 {x} {y})" font-size="9">{}</text>"##,
+                self.groups[i].label()
+            ));
+        }
+
         // Legend
         for (ai, adapter) in self.adapters.iter().enumerate() {
             let color = colors[ai % colors.len()];
@@ -244,8 +270,22 @@ impl QCModule for AdapterContent {
         }
 
         svg.push_str(&format!(
-            r##"<text x="{}" y="18" text-anchor="middle" font-size="13" font-weight="bold">% Adapter</text>"##,
+            r##"<text x="{}" y="18" text-anchor="middle" font-size="13" font-weight="bold">Adapter Content</text>"##,
             width / 2.0
+        ));
+
+        // Y axis label
+        svg.push_str(&format!(
+            r##"<text x="15" y="{}" text-anchor="middle" transform="rotate(-90 15 {})" font-size="11">% Adapter</text>"##,
+            mt + ph / 2.0,
+            mt + ph / 2.0
+        ));
+
+        // X axis label
+        svg.push_str(&format!(
+            r##"<text x="{}" y="{}" text-anchor="middle" font-size="11">Position in read (bp)</text>"##,
+            ml + pw / 2.0,
+            height - 5.0
         ));
 
         svg.push_str("</svg>");

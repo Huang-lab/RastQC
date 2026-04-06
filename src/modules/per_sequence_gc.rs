@@ -1,6 +1,6 @@
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{QCModule, QCResult};
+use super::{QCModule, QCResult, format_count_label};
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -141,7 +141,10 @@ impl QCModule for PerSequenceGC {
             return;
         }
 
-        let total = self.total_count as f64;
+        // Use the sum of distribution bins as totalCount (matches FastQC).
+        // The GCModel smoothing distributes each sequence across multiple bins,
+        // so this sum differs from the raw sequence count.
+        let total: f64 = self.gc_distribution.iter().sum();
 
         // Find firstMode (index of maximum count)
         let mut first_mode: usize = 0;
@@ -308,6 +311,18 @@ impl QCModule for PerSequenceGC {
             mt + ph, ml + pw, mt + ph
         ));
 
+        // Y-axis ticks
+        let y_steps = 5;
+        for i in 0..=y_steps {
+            let frac = i as f64 / y_steps as f64;
+            let val = max_count * frac;
+            let y = mt + ph * (1.0 - frac);
+            svg.push_str(&format!(
+                r##"<text x="{}" y="{}" text-anchor="end" dominant-baseline="middle" font-size="10">{}</text>"##,
+                ml - 5.0, y, format_count_label(val)
+            ));
+        }
+
         // X labels
         for v in (0..=100).step_by(10) {
             let x = ml + v as f64 / 100.0 * pw;
@@ -338,6 +353,20 @@ impl QCModule for PerSequenceGC {
         svg.push_str(&format!(
             r##"<text x="{}" y="18" text-anchor="middle" font-size="13" font-weight="bold">GC distribution over all sequences</text>"##,
             width / 2.0
+        ));
+
+        // Y axis label
+        svg.push_str(&format!(
+            r##"<text x="15" y="{}" text-anchor="middle" transform="rotate(-90 15 {})" font-size="11">Count</text>"##,
+            mt + ph / 2.0,
+            mt + ph / 2.0
+        ));
+
+        // X axis label
+        svg.push_str(&format!(
+            r##"<text x="{}" y="{}" text-anchor="middle" font-size="11">Mean GC Content (%)</text>"##,
+            ml + pw / 2.0,
+            height - 5.0
         ));
 
         svg.push_str("</svg>");

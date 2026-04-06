@@ -1,6 +1,6 @@
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{BaseGroup, QCModule, QCResult};
+use super::{BaseGroup, QCModule, QCResult, format_pct_label};
 use std::any::Any;
 
 pub struct NContent {
@@ -23,8 +23,11 @@ impl NContent {
         }
     }
 
+    const MAX_TRACKED_POSITIONS: usize = 1000;
+
     fn ensure_length(&mut self, len: usize) {
-        while self.n_counts.len() < len {
+        let target = len.min(Self::MAX_TRACKED_POSITIONS);
+        while self.n_counts.len() < target {
             self.n_counts.push(0);
             self.total_counts.push(0);
         }
@@ -41,8 +44,9 @@ impl QCModule for NContent {
     }
 
     fn process_sequence(&mut self, seq: &Sequence) {
-        self.ensure_length(seq.len());
-        for (i, &b) in seq.sequence.iter().enumerate() {
+        let len = seq.len().min(Self::MAX_TRACKED_POSITIONS);
+        self.ensure_length(len);
+        for (i, &b) in seq.sequence[..len].iter().enumerate() {
             self.total_counts[i] += 1;
             if b == b'N' || b == b'n' {
                 self.n_counts[i] += 1;
@@ -148,9 +152,46 @@ impl QCModule for NContent {
             mt + ph, ml + pw, mt + ph
         ));
 
+        // Y-axis ticks
+        let y_steps = 5;
+        for i in 0..=y_steps {
+            let frac = i as f64 / y_steps as f64;
+            let val = max_pct * frac;
+            let y = mt + ph * (1.0 - frac);
+            svg.push_str(&format!(
+                r##"<text x="{}" y="{}" text-anchor="end" dominant-baseline="middle" font-size="10">{}</text>"##,
+                ml - 5.0, y, format_pct_label(val)
+            ));
+        }
+
+        // X-axis tick labels
+        let step = (n / 15).max(1);
+        for i in (0..n).step_by(step) {
+            let x = ml + (i as f64 + 0.5) / n as f64 * pw;
+            let y = mt + ph + 15.0;
+            svg.push_str(&format!(
+                r##"<text x="{x}" y="{y}" text-anchor="end" transform="rotate(-45 {x} {y})" font-size="9">{}</text>"##,
+                self.groups[i].label()
+            ));
+        }
+
         svg.push_str(&format!(
             r##"<text x="{}" y="18" text-anchor="middle" font-size="13" font-weight="bold">N content across all bases</text>"##,
             width / 2.0
+        ));
+
+        // Y axis label
+        svg.push_str(&format!(
+            r##"<text x="15" y="{}" text-anchor="middle" transform="rotate(-90 15 {})" font-size="11">% N</text>"##,
+            mt + ph / 2.0,
+            mt + ph / 2.0
+        ));
+
+        // X axis label
+        svg.push_str(&format!(
+            r##"<text x="{}" y="{}" text-anchor="middle" font-size="11">Position in read (bp)</text>"##,
+            ml + pw / 2.0,
+            height - 5.0
         ));
 
         svg.push_str("</svg>");

@@ -90,7 +90,7 @@ impl QCModule for PerTileQuality {
             return;
         }
 
-        let len = seq.quality.len();
+        let len = seq.quality.len().min(1000);
         if len > self.max_length {
             self.max_length = len;
         }
@@ -104,7 +104,7 @@ impl QCModule for PerTileQuality {
             entry.push((0.0, 0));
         }
 
-        for (i, &q) in seq.quality.iter().enumerate() {
+        for (i, &q) in seq.quality[..len].iter().enumerate() {
             entry[i].0 += q as f64;
             entry[i].1 += 1;
         }
@@ -265,10 +265,45 @@ impl QCModule for PerTileQuality {
             }
         }
 
+        // Y-axis tick labels (tile IDs, show subset)
+        let tile_step = (n_tiles / 10).max(1);
+        for ti in (0..n_tiles).step_by(tile_step) {
+            let y = margin_top + ti as f64 * cell_h + cell_h / 2.0;
+            svg.push_str(&format!(
+                r##"<text x="{}" y="{}" text-anchor="end" dominant-baseline="middle" font-size="9">{}</text>"##,
+                margin_left - 5.0, y, self.tile_ids[ti]
+            ));
+        }
+
+        // X-axis tick labels (base positions, show subset)
+        let x_step = (n_groups / 15).max(1);
+        for gi in (0..n_groups).step_by(x_step) {
+            let x = margin_left + gi as f64 * cell_w + cell_w / 2.0;
+            let y = margin_top + plot_h + 15.0;
+            svg.push_str(&format!(
+                r##"<text x="{x}" y="{y}" text-anchor="end" transform="rotate(-45 {x} {y})" font-size="9">{}</text>"##,
+                self.groups[gi].label()
+            ));
+        }
+
         // Title
         svg.push_str(&format!(
             r##"<text x="{}" y="18" text-anchor="middle" font-size="13" font-weight="bold">Quality per tile</text>"##,
             width / 2.0
+        ));
+
+        // Y axis label
+        svg.push_str(&format!(
+            r##"<text x="15" y="{}" text-anchor="middle" transform="rotate(-90 15 {})" font-size="11">Tile</text>"##,
+            margin_top + plot_h / 2.0,
+            margin_top + plot_h / 2.0
+        ));
+
+        // X axis label
+        svg.push_str(&format!(
+            r##"<text x="{}" y="{}" text-anchor="middle" font-size="11">Position in read (bp)</text>"##,
+            margin_left + plot_w / 2.0,
+            height - 5.0
         ));
 
         svg.push_str("</svg>");
