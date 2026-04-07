@@ -314,7 +314,7 @@ RastQC's streaming parallel pipeline automatically activates for files >50MB, us
 
 If you use RastQC in your research, please cite:
 
-> Huang KL. RastQC: A fast, Rust-based quality control tool for high-throughput sequencing data. *bioRxiv* (2026). [https://www.biorxiv.org/content/10.64898/2026.03.31.71563](https://www.biorxiv.org/content/10.64898/2026.03.31.71563)
+> Huang KL. RastQC: A fast, Rust-based quality control tool for high-throughput sequencing data. *bioRxiv* (2026). [https://www.biorxiv.org/content/10.64898/2026.03.31.715630v2]([https://www.biorxiv.org/content/10.64898/2026.03.31.71563](https://www.biorxiv.org/content/10.64898/2026.03.31.715630v2))
 
 ## Acknowledgments
 
