@@ -15,6 +15,18 @@ A fast quality control tool for high-throughput sequencing data, written in Rust
 
 ## Installation
 
+### Via conda (Bioconda)
+
+```bash
+# Core build (short-read QC)
+conda install -c bioconda rastqc
+
+# With Fast5/POD5 support (Oxford Nanopore)
+conda install -c bioconda rastqc-nanopore
+```
+
+The Bioconda recipe lives in [`recipes/rastqc/`](recipes/rastqc/).
+
 ### From source
 
 ```bash
