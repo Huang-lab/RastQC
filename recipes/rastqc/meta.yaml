@@ -7,7 +7,7 @@ package:
 
 source:
   url: https://github.com/Huang-lab/RastQC/archive/refs/tags/v{{ version }}.tar.gz
-  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+  sha256: 8f1417836958637602e17e1c17ced3e4a05bcbe7d013dd6cc34ed0dc341136d1
 
 build:
   number: 0
