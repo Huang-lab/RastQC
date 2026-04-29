@@ -15,6 +15,18 @@ A fast quality control tool for high-throughput sequencing data, written in Rust
 
 ## Installation
 
+### Via conda (Bioconda)
+
+```bash
+# Core build (short-read QC)
+conda install -c bioconda rastqc
+
+# With Fast5/POD5 support (Oxford Nanopore)
+conda install -c bioconda rastqc-nanopore
+```
+
+The Bioconda recipe lives in [`recipes/rastqc/`](recipes/rastqc/).
+
 ### From source
 
 ```bash
@@ -314,7 +326,7 @@ RastQC's streaming parallel pipeline automatically activates for files >50MB, us
 
 If you use RastQC in your research, please cite:
 
-> Huang KL. RastQC: A fast, Rust-based quality control tool for high-throughput sequencing data. *bioRxiv* (2026). [https://www.biorxiv.org/content/10.64898/2026.03.31.71563](https://www.biorxiv.org/content/10.64898/2026.03.31.71563)
+> Huang KL. RastQC: A fast, Rust-based quality control tool for high-throughput sequencing data. *bioRxiv* (2026). [https://www.biorxiv.org/content/10.64898/2026.03.31.715630v2]([https://www.biorxiv.org/content/10.64898/2026.03.31.71563](https://www.biorxiv.org/content/10.64898/2026.03.31.715630v2))
 
 ## Acknowledgments
 

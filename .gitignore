@@ -35,3 +35,8 @@ Thumbs.db
 /benchmark/data/
 /benchmark/results/
 
+# Local bioconda-recipes fork clone used for CI testing
+/bioconda-recipes/
+
+# Claude Code session state
+/.claude/

@@ -2,7 +2,10 @@
 name = "rastqc"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.70"
 description = "RastQC - A fast quality control tool for high throughput sequence data, written in Rust"
+license = "MIT"
+repository = "https://github.com/Huang-lab/RastQC"
 
 [[bin]]
 name = "rastqc"
