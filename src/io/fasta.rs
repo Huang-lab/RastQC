@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use bzip2::read::BzDecoder;
 use crate::io::Sequence;
 
@@ -19,7 +19,9 @@ impl FastaReader {
         let name = path_ref.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
         
         let reader: Box<dyn Read> = if name.ends_with(".gz") {
-            Box::new(GzDecoder::new(file))
+            // Use MultiGzDecoder to fully decode multi-member gzip streams
+            // (pigz/bgzip output). See issue #3.
+            Box::new(MultiGzDecoder::new(file))
         } else if name.ends_with(".bz2") {
             Box::new(BzDecoder::new(file))
         } else {

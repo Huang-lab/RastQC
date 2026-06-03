@@ -247,6 +247,55 @@ fn test_gzip_input() {
     cleanup(&outdir);
 }
 
+/// Regression test for issue #3: multi-member gzip streams (produced by
+/// pigz/bgzip or any chunked gzip) must be decoded fully. A plain GzDecoder
+/// stops after the first member, silently truncating large inputs. This builds
+/// a 2-member gzip stream and asserts every record is read.
+#[test]
+fn test_multimember_gzip_input() {
+    use std::io::Write;
+
+    let outdir = test_dir().join("gzip_multimember");
+    let _ = fs::create_dir_all(&outdir);
+    let input = outdir.join("multi.fastq.gz");
+
+    // Build two independent gzip members and concatenate them, mimicking how
+    // pigz/bgzip split output into multiple gzip blocks.
+    let mut stream = Vec::new();
+    for chunk in 0..2 {
+        let mut encoder =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        for i in 0..50 {
+            let record = format!(
+                "@read_{}_{}\nACTGACTGACTG\n+\nIIIIIIIIIIII\n",
+                chunk, i
+            );
+            encoder.write_all(record.as_bytes()).unwrap();
+        }
+        stream.extend_from_slice(&encoder.finish().unwrap());
+    }
+    fs::write(&input, &stream).unwrap();
+
+    let output = Command::new(binary_path())
+        .args(["--nozip", "--quiet", "-o"])
+        .arg(&outdir)
+        .arg(&input)
+        .output()
+        .expect("Failed to run");
+
+    assert!(output.status.success());
+
+    // The report must reflect all 100 records across both gzip members, not
+    // just the 50 in the first member.
+    let report = fs::read_to_string(outdir.join("multi_fastqc.html")).unwrap();
+    assert!(
+        report.contains("Total Sequences</td><td>100"),
+        "Expected 100 sequences from both gzip members; multi-member stream was truncated"
+    );
+
+    cleanup(&outdir);
+}
+
 #[test]
 fn test_empty_fastq_error() {
     let outdir = test_dir().join("empty");

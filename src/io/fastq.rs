@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use bzip2::read::BzDecoder;
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
@@ -27,7 +27,12 @@ impl FastqReader {
             File::open(path).with_context(|| format!("Cannot open file: {}", path.display()))?;
 
         let reader: Box<dyn Read> = if name.ends_with(".gz") {
-            Box::new(GzDecoder::new(file))
+            // MultiGzDecoder (not GzDecoder) is required so that multi-member
+            // gzip streams are fully decoded. Large FASTQs compressed with
+            // pigz/bgzip (or any chunked gzip) are concatenations of many gzip
+            // members; GzDecoder stops silently after the first member, which
+            // truncated large inputs to ~20k reads. See issue #3.
+            Box::new(MultiGzDecoder::new(file))
         } else if name.ends_with(".bz2") {
             Box::new(BzDecoder::new(file))
         } else {
