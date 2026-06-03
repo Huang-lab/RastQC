@@ -8,6 +8,15 @@ use std::path::Path;
 use super::colorspace;
 use super::Sequence;
 
+/// Compression of a stream whose name is unknown (e.g. stdin), inferred from
+/// leading magic bytes.
+#[derive(Clone, Copy)]
+enum StreamKind {
+    Gzip,
+    Bzip2,
+    Plain,
+}
+
 pub struct FastqReader {
     reader: Box<dyn BufRead>,
     line_buf: String,
@@ -47,9 +56,35 @@ impl FastqReader {
     }
 
     /// Create a reader from stdin.
+    ///
+    /// stdin carries no filename to infer compression from, so we sniff the
+    /// leading magic bytes and transparently decompress gzip (including
+    /// multi-member pigz/bgzip streams) and bzip2 input — making
+    /// `zcat foo.fastq.gz | rastqc -` and `rastqc - < foo.fastq.gz` behave like
+    /// passing the file directly. Falls back to raw bytes otherwise.
     pub fn from_stdin() -> Self {
+        let mut buf = BufReader::with_capacity(1024 * 1024, io::stdin());
+
+        // Peek (don't consume): BufReader::fill_buf exposes buffered bytes that
+        // the subsequent reads — including the decoder's — still see.
+        let kind = match buf.fill_buf() {
+            Ok(bytes) if bytes.starts_with(&[0x1f, 0x8b]) => StreamKind::Gzip,
+            Ok(bytes) if bytes.starts_with(b"BZh") => StreamKind::Bzip2,
+            _ => StreamKind::Plain,
+        };
+
+        let reader: Box<dyn BufRead> = match kind {
+            StreamKind::Gzip => {
+                Box::new(BufReader::with_capacity(1024 * 1024, MultiGzDecoder::new(buf)))
+            }
+            StreamKind::Bzip2 => {
+                Box::new(BufReader::with_capacity(1024 * 1024, BzDecoder::new(buf)))
+            }
+            StreamKind::Plain => Box::new(buf),
+        };
+
         FastqReader {
-            reader: Box::new(BufReader::with_capacity(1024 * 1024, io::stdin())),
+            reader,
             line_buf: String::with_capacity(512),
             colorspace_detected: None,
         }
