@@ -64,8 +64,9 @@ rastqc -o results/ sample_R1.fastq.gz sample_R2.fastq.gz
 # HTML only (no ZIP)
 rastqc --nozip -o results/ sample.fastq.gz
 
-# Stream from stdin
+# Stream from stdin (gzip/bzip2 auto-detected)
 samtools fastq aligned.bam | rastqc --stdin -o results/
+zcat sample.fastq.gz | rastqc --stdin -o results/
 
 # Use 8 threads
 rastqc -t 8 -o results/ *.fastq.gz
@@ -86,7 +87,7 @@ rastqc --multiqc-json -o results/ sample.fastq.gz
 rastqc [OPTIONS] [FILES]...
 
 Arguments:
-  [FILES]...  Input files (FASTQ, BAM, SAM, Fast5, POD5). Use "-" for stdin.
+  [FILES]...  Input files (FASTQ, FASTA, BAM, SAM, Fast5, POD5). Use "-" for stdin (gzip/bzip2 auto-detected).
 
 Options:
   -o, --outdir <DIR>            Output directory [default: current directory]
@@ -95,7 +96,7 @@ Options:
   -a, --adapters <FILE>         Custom adapter list (tab-separated: name\tsequence)
   -l, --limits <FILE>           Custom pass/warn/fail thresholds
   -k, --kmer-size <N>           Kmer size for enrichment analysis [default: 7]
-      --stdin                   Read FASTQ from standard input
+      --stdin                   Read FASTQ from standard input (gzip/bzip2 auto-detected)
       --nofilter                Include all reads (don't skip QC-failed reads)
       --extract                 Extract ZIP contents after creation
       --nozip                   Write HTML report only, skip ZIP archive

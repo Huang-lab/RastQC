@@ -296,6 +296,100 @@ fn test_multimember_gzip_input() {
     cleanup(&outdir);
 }
 
+/// stdin has no filename, so compression is detected from magic bytes. Verify
+/// a gzip stream piped to `rastqc -` is transparently decompressed (and that
+/// multi-member streams are read in full, mirroring issue #3).
+#[test]
+fn test_stdin_gzip_autodetect() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let outdir = test_dir().join("stdin_gzip");
+    let _ = fs::create_dir_all(&outdir);
+
+    // Two concatenated gzip members (pigz/bgzip-style), 100 records total.
+    let mut stream = Vec::new();
+    for chunk in 0..2 {
+        let mut encoder =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        for i in 0..50 {
+            let record = format!("@r_{}_{}\nACGTACGTACGT\n+\nIIIIIIIIIIII\n", chunk, i);
+            encoder.write_all(record.as_bytes()).unwrap();
+        }
+        stream.extend_from_slice(&encoder.finish().unwrap());
+    }
+
+    let mut child = Command::new(binary_path())
+        .args(["-", "--nozip", "--quiet", "-o"])
+        .arg(&outdir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Failed to spawn");
+
+    // Write the compressed stream, then drop stdin to signal EOF before waiting.
+    {
+        let mut child_stdin = child.stdin.take().expect("no stdin handle");
+        child_stdin.write_all(&stream).expect("Failed to write to stdin");
+    }
+    let status = child.wait().expect("Failed to wait");
+
+    assert!(status.success());
+
+    let report = fs::read_to_string(outdir.join("stdin_fastqc.html")).unwrap();
+    assert!(
+        report.contains("Total Sequences</td><td>100"),
+        "Expected 100 sequences from gzip-compressed stdin; stream was not decompressed or was truncated"
+    );
+
+    cleanup(&outdir);
+}
+
+/// Companion to `test_stdin_gzip_autodetect` covering the bzip2 magic-byte
+/// branch ("BZh"): a bzip2 stream piped to `rastqc -` must be transparently
+/// decompressed.
+#[test]
+fn test_stdin_bzip2_autodetect() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let outdir = test_dir().join("stdin_bzip2");
+    let _ = fs::create_dir_all(&outdir);
+
+    let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+    for i in 0..100 {
+        let record = format!("@r_{}\nACGTACGTACGT\n+\nIIIIIIIIIIII\n", i);
+        encoder.write_all(record.as_bytes()).unwrap();
+    }
+    let stream = encoder.finish().unwrap();
+
+    let mut child = Command::new(binary_path())
+        .args(["-", "--nozip", "--quiet", "-o"])
+        .arg(&outdir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Failed to spawn");
+
+    {
+        let mut child_stdin = child.stdin.take().expect("no stdin handle");
+        child_stdin.write_all(&stream).expect("Failed to write to stdin");
+    }
+    let status = child.wait().expect("Failed to wait");
+
+    assert!(status.success());
+
+    let report = fs::read_to_string(outdir.join("stdin_fastqc.html")).unwrap();
+    assert!(
+        report.contains("Total Sequences</td><td>100"),
+        "Expected 100 sequences from bzip2-compressed stdin; stream was not decompressed"
+    );
+
+    cleanup(&outdir);
+}
+
 #[test]
 fn test_empty_fastq_error() {
     let outdir = test_dir().join("empty");
