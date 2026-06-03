@@ -152,3 +152,43 @@ pub fn should_use_parallel(path: &Path) -> bool {
         .map(|m| m.len() > 50 * 1024 * 1024) // > 50 MB
         .unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::FastQCConfig;
+    use std::io::Write;
+
+    /// Regression test for issue #3, parallel path: large files (>50 MB) are
+    /// processed by `process_file_parallel`, whose reader thread decodes the
+    /// gzip stream. A multi-member gzip stream must be fully decoded here too,
+    /// not just on the serial path. We call the function directly so a tiny
+    /// fixture exercises the same reader/decoder a 30 GB file would.
+    #[test]
+    fn test_parallel_reads_all_gzip_members() {
+        // Build a 2-member gzip stream (mimics pigz/bgzip chunking).
+        let mut stream = Vec::new();
+        for chunk in 0..2 {
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            for i in 0..50 {
+                let record = format!("@r_{}_{}\nACGTACGTACGT\n+\nIIIIIIIIIIII\n", chunk, i);
+                encoder.write_all(record.as_bytes()).unwrap();
+            }
+            stream.extend_from_slice(&encoder.finish().unwrap());
+        }
+
+        let path = std::env::temp_dir().join("rastqc_parallel_multimember_test.fastq.gz");
+        std::fs::write(&path, &stream).unwrap();
+
+        let config = FastQCConfig::new(None, None, None, 7, false, 50, false).unwrap();
+        let (_modules, count) = process_file_parallel(&path, &config, 4).unwrap();
+
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            count, 100,
+            "parallel path must read all 100 records across both gzip members, got {count}"
+        );
+    }
+}
