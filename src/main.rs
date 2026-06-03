@@ -43,8 +43,8 @@ pub struct FileTiming {
 #[command(name = "rastqc", version = "0.1.0")]
 #[command(about = "RastQC - A quality control tool for high throughput sequence data")]
 struct Cli {
-    /// Input files (FASTQ, BAM, SAM). Use "-" to read FASTQ from stdin
-    /// (gzip/bzip2 auto-detected).
+    /// Input files (FASTQ, FASTA, BAM, SAM, Fast5, POD5). Use "-" to read
+    /// FASTQ from stdin (gzip/bzip2 auto-detected).
     files: Vec<PathBuf>,
 
     /// Read FASTQ from stdin (equivalent to passing "-" as input).

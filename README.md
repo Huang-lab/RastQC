@@ -87,7 +87,7 @@ rastqc --multiqc-json -o results/ sample.fastq.gz
 rastqc [OPTIONS] [FILES]...
 
 Arguments:
-  [FILES]...  Input files (FASTQ, BAM, SAM, Fast5, POD5). Use "-" for stdin (gzip/bzip2 auto-detected).
+  [FILES]...  Input files (FASTQ, FASTA, BAM, SAM, Fast5, POD5). Use "-" for stdin (gzip/bzip2 auto-detected).
 
 Options:
   -o, --outdir <DIR>            Output directory [default: current directory]
