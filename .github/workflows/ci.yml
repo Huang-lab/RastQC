@@ -32,8 +32,8 @@ jobs:
       - name: Check
         run: cargo check --workspace
 
-      - name: Run library unit tests
-        run: cargo test --workspace --lib
+      - name: Run unit tests
+        run: cargo test --workspace --bins
 
       - name: Run integration tests
         run: cargo test --workspace --tests
