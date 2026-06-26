@@ -1,6 +1,6 @@
+use super::{BaseGroup, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{BaseGroup, QCModule, QCResult};
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -88,7 +88,8 @@ impl QCModule for KmerContent {
 
         // Reuse uppercase buffer (zero allocation in steady state)
         self.upper_buf.clear();
-        self.upper_buf.extend(seq.sequence[..len].iter().map(|b| b.to_ascii_uppercase()));
+        self.upper_buf
+            .extend(seq.sequence[..len].iter().map(|b| b.to_ascii_uppercase()));
 
         for i in 0..=(len - self.kmer_size) {
             let kmer = &self.upper_buf[i..i + self.kmer_size];
@@ -144,7 +145,7 @@ impl QCModule for KmerContent {
             let mut max_group_label = String::new();
             let mut min_pvalue = 1.0_f64;
 
-            for (_gi, group) in self.groups.iter().enumerate() {
+            for group in self.groups.iter() {
                 let mut obs = 0u64;
                 let mut total_in_group = 0u64;
 
@@ -174,7 +175,7 @@ impl QCModule for KmerContent {
                     if std > 0.0 {
                         let z = (obs as f64 - mean) / std;
                         // Approximate one-sided p-value
-                        let pvalue = 0.5 * (-z * 0.7071).exp(); // rough approximation
+                        let pvalue = 0.5 * (-z * std::f64::consts::FRAC_1_SQRT_2).exp(); // rough approximation
                         let corrected = pvalue * total_possible;
                         if corrected < min_pvalue {
                             min_pvalue = corrected;

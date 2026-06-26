@@ -1,15 +1,15 @@
+use super::{format_pct_label, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{QCModule, QCResult, format_pct_label};
 use std::any::Any;
 use std::collections::HashMap;
 
 const OBSERVATION_CUTOFF: usize = 100_000;
 
-/// Duplication level bin labels matching FastQC (16 bins, 0-indexed)
+/// Duplication level bin labels matching FastQC (16 bins, 0-indexed).
+/// Slot 9 covers counts 10+ (up to 50), so its label is ">10" not "10".
 const BIN_LABELS: &[&str] = &[
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
-    ">10", ">50", ">100", ">500", ">1k", ">5k", ">10k",
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", ">10", ">50", ">100", ">500", ">1k", ">5k", ">10k",
 ];
 
 pub struct DuplicationLevel {
@@ -24,6 +24,7 @@ pub struct DuplicationLevel {
     upper_buf: Vec<u8>,
     // Results
     total_percentages: [f64; 16],
+    dedup_percentages: [f64; 16],
     percent_different: f64,
     qc_result: QCResult,
 }
@@ -39,6 +40,7 @@ impl DuplicationLevel {
             unique_count: 0,
             upper_buf: Vec::with_capacity(dup_length),
             total_percentages: [0.0; 16],
+            dedup_percentages: [0.0; 16],
             percent_different: 100.0,
             qc_result: QCResult::NotRun,
         }
@@ -47,14 +49,23 @@ impl DuplicationLevel {
     /// Map a duplication count to a bin index (0-15), matching FastQC's binning.
     fn dup_slot(count: u64) -> usize {
         let c = count.saturating_sub(1); // FastQC uses tempDupSlot = dupLevel - 1
-        if c > 9999 || count == 0 { 15 }
-        else if c > 4999 { 14 }
-        else if c > 999 { 13 }
-        else if c > 499 { 12 }
-        else if c > 99 { 11 }
-        else if c > 49 { 10 }
-        else if c > 9 { 9 }
-        else { c as usize }
+        if c > 9999 || count == 0 {
+            15
+        } else if c > 4999 {
+            14
+        } else if c > 999 {
+            13
+        } else if c > 499 {
+            12
+        } else if c > 99 {
+            11
+        } else if c > 49 {
+            10
+        } else if c > 9 {
+            9
+        } else {
+            c as usize
+        }
     }
 
     /// FastQC's exact getCorrectedCount: iterative binomial correction.
@@ -81,8 +92,7 @@ impl DuplicationLevel {
         let mut p_not_seeing: f64 = 1.0;
 
         // Limit below which correction is negligible (<0.01 of an observation)
-        let limit_of_caring =
-            1.0 - (num_observations as f64 / (num_observations as f64 + 0.01));
+        let limit_of_caring = 1.0 - (num_observations as f64 / (num_observations as f64 + 0.01));
 
         for i in 0..count_at_limit {
             let numerator = (total_count - i).saturating_sub(dup_level) as f64;
@@ -121,7 +131,8 @@ impl QCModule for DuplicationLevel {
         // Truncate and uppercase into reusable buffer (zero allocation in steady state)
         let end = seq.sequence.len().min(self.dup_length);
         self.upper_buf.clear();
-        self.upper_buf.extend(seq.sequence[..end].iter().map(|b| b.to_ascii_uppercase()));
+        self.upper_buf
+            .extend(seq.sequence[..end].iter().map(|b| b.to_ascii_uppercase()));
 
         if self.frozen {
             // Only increment existing entries after freeze
@@ -149,15 +160,18 @@ impl QCModule for DuplicationLevel {
 
         // Collate: count how many unique sequences have each duplication level
         let mut collated: HashMap<u64, u64> = HashMap::new();
-        for (_, &count) in &self.sequences {
+        for &count in self.sequences.values() {
             *collated.entry(count).or_insert(0) += 1;
         }
 
-        // Apply correction and accumulate into bins (matching FastQC exactly)
+        // Apply correction and accumulate into bins (matching FastQC exactly).
+        // - dedup_percentages: percentage of *deduplicated* library per bin (# unique seqs)
+        // - total_percentages: percentage of *total* library per bin (# reads, weighted by count)
         let mut dedup_total: f64 = 0.0;
         let mut raw_total: f64 = 0.0;
 
         self.total_percentages = [0.0; 16];
+        self.dedup_percentages = [0.0; 16];
 
         for (&dup_level, &num_observations) in &collated {
             let corrected = Self::get_corrected_count(
@@ -171,13 +185,21 @@ impl QCModule for DuplicationLevel {
             raw_total += corrected * dup_level as f64;
 
             let slot = Self::dup_slot(dup_level);
+            // Total = weighted by how many reads this level contributes
             self.total_percentages[slot] += corrected * dup_level as f64;
+            // Dedup = weighted only by how many unique sequences are at this level
+            self.dedup_percentages[slot] += corrected;
         }
 
         // Convert to percentages
         if raw_total > 0.0 {
             for i in 0..16 {
                 self.total_percentages[i] = self.total_percentages[i] / raw_total * 100.0;
+            }
+        }
+        if dedup_total > 0.0 {
+            for i in 0..16 {
+                self.dedup_percentages[i] = self.dedup_percentages[i] / dedup_total * 100.0;
             }
         }
 
@@ -187,8 +209,14 @@ impl QCModule for DuplicationLevel {
             100.0
         };
 
-        let warn = config.get_limit("duplication").map(|l| l.warn).unwrap_or(70.0);
-        let error = config.get_limit("duplication").map(|l| l.error).unwrap_or(50.0);
+        let warn = config
+            .get_limit("duplication")
+            .map(|l| l.warn)
+            .unwrap_or(70.0);
+        let error = config
+            .get_limit("duplication")
+            .map(|l| l.error)
+            .unwrap_or(50.0);
 
         self.qc_result = if self.percent_different < error {
             QCResult::Fail
@@ -212,11 +240,10 @@ impl QCModule for DuplicationLevel {
             self.percent_different
         );
 
-        for i in 0..16 {
-            // FastQC only outputs totalPercentages (not separate dedup line)
+        for (i, label) in BIN_LABELS.iter().enumerate() {
             out.push_str(&format!(
                 "{}\t{:.2}\t{:.2}\n",
-                BIN_LABELS[i], 0.0, self.total_percentages[i]
+                label, self.dedup_percentages[i], self.total_percentages[i]
             ));
         }
         out.push_str(">>END_MODULE\n");
@@ -251,7 +278,9 @@ impl QCModule for DuplicationLevel {
         for i in 0..n {
             let x = ml + (i as f64 + 0.5) / n as f64 * pw;
             let y = mt + ph * (1.0 - self.total_percentages[i] / max_pct);
-            if i > 0 { svg.push(' '); }
+            if i > 0 {
+                svg.push(' ');
+            }
             svg.push_str(&format!("{:.1},{:.1}", x, y));
         }
         svg.push_str(r##"" fill="none" stroke="#0000ff" stroke-width="2" />"##);
@@ -263,7 +292,9 @@ impl QCModule for DuplicationLevel {
         ));
         svg.push_str(&format!(
             r##"<line x1="{ml}" y1="{}" x2="{}" y2="{}" stroke="black" />"##,
-            mt + ph, ml + pw, mt + ph
+            mt + ph,
+            ml + pw,
+            mt + ph
         ));
 
         // Y-axis ticks
@@ -279,12 +310,11 @@ impl QCModule for DuplicationLevel {
         }
 
         // X labels
-        for i in 0..n {
+        for (i, label) in BIN_LABELS.iter().enumerate().take(n) {
             let x = ml + (i as f64 + 0.5) / n as f64 * pw;
             let y = mt + ph + 15.0;
             svg.push_str(&format!(
-                r##"<text x="{x}" y="{y}" text-anchor="end" transform="rotate(-45 {x} {y})" font-size="9">{}</text>"##,
-                BIN_LABELS[i]
+                r##"<text x="{x}" y="{y}" text-anchor="end" transform="rotate(-45 {x} {y})" font-size="9">{label}</text>"##
             ));
         }
 

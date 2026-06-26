@@ -1,16 +1,16 @@
-pub mod basic_stats;
-pub mod per_base_quality;
-pub mod per_tile_quality;
-pub mod per_sequence_quality;
-pub mod per_base_content;
-pub mod per_sequence_gc;
-pub mod n_content;
-pub mod sequence_length;
-pub mod duplication;
-pub mod overrepresented;
 pub mod adapter_content;
+pub mod basic_stats;
+pub mod duplication;
 pub mod kmer_content;
 pub mod long_read_quality;
+pub mod n_content;
+pub mod overrepresented;
+pub mod per_base_content;
+pub mod per_base_quality;
+pub mod per_sequence_gc;
+pub mod per_sequence_quality;
+pub mod per_tile_quality;
+pub mod sequence_length;
 
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
@@ -99,10 +99,7 @@ pub trait QCModule: Send {
 /// Merge two module sets. Each module in `target` merges from the corresponding
 /// module in `source`. Both sets must have the same modules in the same order
 /// (as produced by ModuleFactory::create_modules).
-pub fn merge_module_sets(
-    target: &mut [Box<dyn QCModule>],
-    source: &mut [Box<dyn QCModule>],
-) {
+pub fn merge_module_sets(target: &mut [Box<dyn QCModule>], source: &mut [Box<dyn QCModule>]) {
     assert_eq!(target.len(), source.len());
     for (t, s) in target.iter_mut().zip(source.iter_mut()) {
         t.merge_from(s.as_mut());
@@ -135,7 +132,10 @@ fn text_data_to_json(text: &str, module_name: &str, result: QCResult) -> JsonVal
         let values: Vec<&str> = line.split('\t').collect();
         let mut row = serde_json::Map::new();
         for (i, val) in values.iter().enumerate() {
-            let key = headers.get(i).cloned().unwrap_or_else(|| format!("col_{}", i));
+            let key = headers
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("col_{}", i));
             // Try to parse as number
             if let Ok(n) = val.parse::<f64>() {
                 row.insert(key, serde_json::json!(n));
@@ -198,7 +198,11 @@ impl BaseGroup {
                 5
             } else if pos < 500 {
                 // 100-499: 5bp or 10bp depending on total len
-                if max_length > 200 { 10 } else { 5 }
+                if max_length > 200 {
+                    10
+                } else {
+                    5
+                }
             } else {
                 // 500+: 50bp
                 50
@@ -361,10 +365,14 @@ impl ModuleFactory {
             modules.push(Box::new(sequence_length::SequenceLengthDist::new()));
         }
         if !config.is_ignored("duplication") {
-            modules.push(Box::new(duplication::DuplicationLevel::new(config.dup_length)));
+            modules.push(Box::new(duplication::DuplicationLevel::new(
+                config.dup_length,
+            )));
         }
         if !config.is_ignored("overrepresented") {
-            modules.push(Box::new(overrepresented::OverrepresentedSeqs::new(config.dup_length)));
+            modules.push(Box::new(overrepresented::OverrepresentedSeqs::new(
+                config.dup_length,
+            )));
         }
         if !config.is_ignored("adapter") {
             modules.push(Box::new(adapter_content::AdapterContent::new(config)));

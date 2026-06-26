@@ -35,7 +35,6 @@ pub struct FastQCConfig {
     #[allow(dead_code)]
     pub nofilter: bool,
     pub dup_length: usize,
-    pub long_read: bool,
 }
 
 const DEFAULT_ADAPTERS: &str = "\
@@ -71,7 +70,6 @@ impl FastQCConfig {
         kmer_size: usize,
         nofilter: bool,
         dup_length: usize,
-        long_read: bool,
     ) -> Result<Self> {
         let adapters = if let Some(path) = adapters_path {
             let content = std::fs::read_to_string(path)
@@ -104,7 +102,6 @@ impl FastQCConfig {
             kmer_size,
             nofilter,
             dup_length,
-            long_read,
         })
     }
 
@@ -121,7 +118,11 @@ impl FastQCConfig {
 
     /// Enable long-read QC modules (un-ignore them).
     pub fn enable_long_read_modules(&mut self) {
-        for key in &["read_length_n50", "quality_stratified_length", "homopolymer"] {
+        for key in &[
+            "read_length_n50",
+            "quality_stratified_length",
+            "homopolymer",
+        ] {
             if let Some(lim) = self.limits.get_mut(*key) {
                 lim.ignore = false;
             }
@@ -223,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_default_config() {
-        let config = FastQCConfig::new(None, None, None, 7, false, 50, false).unwrap();
+        let config = FastQCConfig::new(None, None, None, 7, false, 50).unwrap();
         assert_eq!(config.kmer_size, 7);
         assert_eq!(config.dup_length, 50);
         assert!(!config.adapters.is_empty());
@@ -232,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_default_adapters_count() {
-        let config = FastQCConfig::new(None, None, None, 7, false, 50, false).unwrap();
+        let config = FastQCConfig::new(None, None, None, 7, false, 50).unwrap();
         assert_eq!(config.adapters.len(), 6); // 6 default adapters
     }
 
@@ -277,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_is_ignored() {
-        let config = FastQCConfig::new(None, None, None, 7, false, 50, false).unwrap();
+        let config = FastQCConfig::new(None, None, None, 7, false, 50).unwrap();
         assert!(!config.is_ignored("kmer")); // kmer enabled by default
         assert!(!config.is_ignored("quality_base"));
     }

@@ -1,8 +1,8 @@
-mod fastq;
 mod bam;
-mod fasta;
 pub mod colorspace;
 mod fast5;
+mod fasta;
+mod fastq;
 mod pod5;
 
 use anyhow::{bail, Result};

@@ -1,6 +1,6 @@
+use super::{format_pct_label, BaseGroup, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{BaseGroup, QCModule, QCResult, format_pct_label};
 use std::any::Any;
 
 pub struct NContent {
@@ -62,7 +62,10 @@ impl QCModule for NContent {
         self.groups = BaseGroup::make_groups(self.n_counts.len());
 
         let warn = config.get_limit("n_content").map(|l| l.warn).unwrap_or(5.0);
-        let error = config.get_limit("n_content").map(|l| l.error).unwrap_or(20.0);
+        let error = config
+            .get_limit("n_content")
+            .map(|l| l.error)
+            .unwrap_or(20.0);
 
         self.qc_result = QCResult::Pass;
 
@@ -127,7 +130,12 @@ impl QCModule for NContent {
         let ph = height - mt - mb;
         let n = self.groups.len();
 
-        let max_pct = self.percentages.iter().copied().fold(0.0_f64, f64::max).max(1.0);
+        let max_pct = self
+            .percentages
+            .iter()
+            .copied()
+            .fold(0.0_f64, f64::max)
+            .max(1.0);
 
         let mut svg = format!(
             r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {} {}" font-family="Arial, sans-serif" font-size="11">"##,
@@ -138,7 +146,9 @@ impl QCModule for NContent {
         for (i, &pct) in self.percentages.iter().enumerate() {
             let x = ml + (i as f64 + 0.5) / n as f64 * pw;
             let y = mt + ph * (1.0 - pct / max_pct);
-            if i > 0 { svg.push(' '); }
+            if i > 0 {
+                svg.push(' ');
+            }
             svg.push_str(&format!("{:.1},{:.1}", x, y));
         }
         svg.push_str(r##"" fill="none" stroke="#ff0000" stroke-width="1.5" />"##);
@@ -149,7 +159,9 @@ impl QCModule for NContent {
         ));
         svg.push_str(&format!(
             r##"<line x1="{ml}" y1="{}" x2="{}" y2="{}" stroke="black" />"##,
-            mt + ph, ml + pw, mt + ph
+            mt + ph,
+            ml + pw,
+            mt + ph
         ));
 
         // Y-axis ticks

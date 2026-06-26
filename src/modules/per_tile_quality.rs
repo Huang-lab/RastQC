@@ -1,6 +1,6 @@
+use super::{BaseGroup, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{BaseGroup, QCModule, QCResult};
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -95,10 +95,7 @@ impl QCModule for PerTileQuality {
             self.max_length = len;
         }
 
-        let entry = self
-            .tile_data
-            .entry(tile)
-            .or_insert_with(|| Vec::new());
+        let entry = self.tile_data.entry(tile).or_default();
 
         while entry.len() < len {
             entry.push((0.0, 0));
@@ -133,7 +130,8 @@ impl QCModule for PerTileQuality {
             for (gi, group) in self.groups.iter().enumerate() {
                 for pos in group.start..=group.end {
                     if pos < tile_data.len() {
-                        global_mean[gi] += tile_data[pos].0 - offset as f64 * tile_data[pos].1 as f64;
+                        global_mean[gi] +=
+                            tile_data[pos].0 - offset as f64 * tile_data[pos].1 as f64;
                         global_count[gi] += tile_data[pos].1;
                     }
                 }
@@ -161,11 +159,7 @@ impl QCModule for PerTileQuality {
                         count += tile_data[pos].1;
                     }
                 }
-                let tile_mean = if count > 0 {
-                    sum / count as f64
-                } else {
-                    0.0
-                };
+                let tile_mean = if count > 0 { sum / count as f64 } else { 0.0 };
                 let dev = tile_mean - global_mean[gi];
                 if dev.abs() > self.max_deviation {
                     self.max_deviation = dev.abs();
@@ -252,10 +246,18 @@ impl QCModule for PerTileQuality {
                 let norm = (dev / max_dev).clamp(-1.0, 1.0);
                 let (r, g, b) = if norm < 0.0 {
                     let t = -norm;
-                    ((255.0 * (1.0 - t * 0.3)) as u8, (255.0 * (1.0 - t)) as u8, (255.0 * (1.0 - t)) as u8)
+                    (
+                        (255.0 * (1.0 - t * 0.3)) as u8,
+                        (255.0 * (1.0 - t)) as u8,
+                        (255.0 * (1.0 - t)) as u8,
+                    )
                 } else {
                     let t = norm;
-                    ((255.0 * (1.0 - t)) as u8, (255.0 * (1.0 - t)) as u8, (255.0 * (1.0 - t * 0.3)) as u8)
+                    (
+                        (255.0 * (1.0 - t)) as u8,
+                        (255.0 * (1.0 - t)) as u8,
+                        (255.0 * (1.0 - t * 0.3)) as u8,
+                    )
                 };
 
                 svg.push_str(&format!(
@@ -318,9 +320,11 @@ impl QCModule for PerTileQuality {
         if let Some(other) = other.as_any_mut().downcast_mut::<Self>() {
             self.total_sequences += other.total_sequences;
             self.max_length = self.max_length.max(other.max_length);
-            if other.gave_up { self.gave_up = true; }
+            if other.gave_up {
+                self.gave_up = true;
+            }
             for (tile_id, other_positions) in &other.tile_data {
-                let entry = self.tile_data.entry(*tile_id).or_insert_with(Vec::new);
+                let entry = self.tile_data.entry(*tile_id).or_default();
                 while entry.len() < other_positions.len() {
                     entry.push((0.0, 0));
                 }

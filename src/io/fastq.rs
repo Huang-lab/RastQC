@@ -19,7 +19,6 @@ enum StreamKind {
 
 pub struct FastqReader {
     reader: Box<dyn BufRead>,
-    line_buf: String,
     colorspace_detected: Option<bool>,
 }
 
@@ -27,10 +26,10 @@ impl FastqReader {
     /// Open a FASTQ file (optionally compressed with gzip or bzip2).
     pub fn open(path: &Path) -> Result<Self> {
         let name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase();
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
 
         let file =
             File::open(path).with_context(|| format!("Cannot open file: {}", path.display()))?;
@@ -50,7 +49,6 @@ impl FastqReader {
 
         Ok(FastqReader {
             reader: Box::new(BufReader::with_capacity(1024 * 1024, reader)),
-            line_buf: String::with_capacity(512),
             colorspace_detected: None,
         })
     }
@@ -68,15 +66,16 @@ impl FastqReader {
         // Peek (don't consume): BufReader::fill_buf exposes buffered bytes that
         // the subsequent reads — including the decoder's — still see.
         let kind = match buf.fill_buf() {
-            Ok(bytes) if bytes.starts_with(&[0x1f, 0x8b]) => StreamKind::Gzip,
-            Ok(bytes) if bytes.starts_with(b"BZh") => StreamKind::Bzip2,
+            Ok([0x1f, 0x8b, ..]) => StreamKind::Gzip,
+            Ok([b'B', b'Z', b'h', ..]) => StreamKind::Bzip2,
             _ => StreamKind::Plain,
         };
 
         let reader: Box<dyn BufRead> = match kind {
-            StreamKind::Gzip => {
-                Box::new(BufReader::with_capacity(1024 * 1024, MultiGzDecoder::new(buf)))
-            }
+            StreamKind::Gzip => Box::new(BufReader::with_capacity(
+                1024 * 1024,
+                MultiGzDecoder::new(buf),
+            )),
             StreamKind::Bzip2 => {
                 Box::new(BufReader::with_capacity(1024 * 1024, BzDecoder::new(buf)))
             }
@@ -85,14 +84,13 @@ impl FastqReader {
 
         FastqReader {
             reader,
-            line_buf: String::with_capacity(512),
             colorspace_detected: None,
         }
     }
 
     pub fn next_sequence(&mut self) -> Result<Option<Sequence>> {
         let mut header_line = String::with_capacity(512);
-        
+
         // Read header line (starts with @)
         loop {
             header_line.clear();
@@ -109,7 +107,9 @@ impl FastqReader {
                     break;
                 }
                 Err(e) => {
-                    if e.kind() == io::ErrorKind::UnexpectedEof || e.to_string().contains("unexpected end of file") {
+                    if e.kind() == io::ErrorKind::UnexpectedEof
+                        || e.to_string().contains("unexpected end of file")
+                    {
                         eprintln!("Warning: Unexpected end of compressed file. Processing remaining data.");
                         return Ok(None);
                     }
@@ -125,8 +125,12 @@ impl FastqReader {
         let mut sequence_line = String::with_capacity(512);
         let res = self.reader.read_line(&mut sequence_line);
         if let Err(e) = res {
-            if e.kind() == io::ErrorKind::UnexpectedEof || e.to_string().contains("unexpected end of file") {
-                eprintln!("Warning: File truncated during sequence read. Skipping last partial record.");
+            if e.kind() == io::ErrorKind::UnexpectedEof
+                || e.to_string().contains("unexpected end of file")
+            {
+                eprintln!(
+                    "Warning: File truncated during sequence read. Skipping last partial record."
+                );
                 return Ok(None);
             }
             return Err(e).context("Error reading sequence line");
@@ -137,8 +141,12 @@ impl FastqReader {
         let mut sep_line = String::with_capacity(16);
         let res = self.reader.read_line(&mut sep_line);
         if let Err(e) = res {
-            if e.kind() == io::ErrorKind::UnexpectedEof || e.to_string().contains("unexpected end of file") {
-                eprintln!("Warning: File truncated during separator read. Skipping last partial record.");
+            if e.kind() == io::ErrorKind::UnexpectedEof
+                || e.to_string().contains("unexpected end of file")
+            {
+                eprintln!(
+                    "Warning: File truncated during separator read. Skipping last partial record."
+                );
                 return Ok(None);
             }
             return Err(e).context("Error reading separator line");
@@ -151,7 +159,9 @@ impl FastqReader {
         let mut quality_line = String::with_capacity(512);
         let res = self.reader.read_line(&mut quality_line);
         if let Err(e) = res {
-            if e.kind() == io::ErrorKind::UnexpectedEof || e.to_string().contains("unexpected end of file") {
+            if e.kind() == io::ErrorKind::UnexpectedEof
+                || e.to_string().contains("unexpected end of file")
+            {
                 eprintln!("Warning: File truncated during quality score read. Skipping last partial record.");
                 return Ok(None);
             }

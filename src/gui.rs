@@ -110,8 +110,7 @@ fn serve_index(outdir: &Path) -> Response<std::io::Cursor<Vec<u8>>> {
     html.push_str("</div>\n");
     html.push_str("</body>\n</html>");
 
-    Response::from_data(html.into_bytes())
-        .with_header(content_type("text/html; charset=utf-8"))
+    Response::from_data(html.into_bytes()).with_header(content_type("text/html; charset=utf-8"))
 }
 
 fn serve_file(outdir: &Path, relative: &str) -> Response<std::io::Cursor<Vec<u8>>> {

@@ -38,7 +38,9 @@ impl Fast5Reader {
                 // Look for basecalled FASTQ data
                 let analyses_path = format!("{}/Analyses", read_name);
                 if let Ok(analyses) = file.group(&analyses_path) {
-                    if let Some(seq) = extract_basecall_from_analyses(&file, &analyses_path, &analyses)? {
+                    if let Some(seq) =
+                        extract_basecall_from_analyses(&file, &analyses_path, &analyses)?
+                    {
                         sequences.push(seq);
                     }
                 }
@@ -97,10 +99,7 @@ fn extract_basecall_from_analyses(
     sorted.sort();
 
     for bc_name in sorted.iter().rev() {
-        let fastq_path = format!(
-            "{}/{}/BaseCalled_template/Fastq",
-            analyses_path, bc_name
-        );
+        let fastq_path = format!("{}/{}/BaseCalled_template/Fastq", analyses_path, bc_name);
 
         if let Ok(dataset) = file.dataset(&fastq_path) {
             if let Ok(fastq_str) = dataset.read_scalar::<hdf5::types::VarLenUnicode>() {

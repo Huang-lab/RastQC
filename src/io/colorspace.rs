@@ -1,14 +1,14 @@
-/// SOLiD colorspace to basespace decoder.
-///
-/// SOLiD platform uses di-base encoding where each "color" (0-3) represents
-/// a transition between two consecutive bases. The first character is a primer
-/// base (A/C/G/T), followed by color codes.
-///
-/// Transition table:
-///   Color 0: A→A, C→C, G→G, T→T (same base)
-///   Color 1: A→C, C→A, G→T, T→G
-///   Color 2: A→G, C→T, G→A, T→C
-///   Color 3: A→T, C→G, G→C, T→A
+//! SOLiD colorspace to basespace decoder.
+//!
+//! SOLiD platform uses di-base encoding where each "color" (0-3) represents
+//! a transition between two consecutive bases. The first character is a primer
+//! base (A/C/G/T), followed by color codes.
+//!
+//! Transition table:
+//!   Color 0: A→A, C→C, G→G, T→T (same base)
+//!   Color 1: A→C, C→A, G→T, T→G
+//!   Color 2: A→G, C→T, G→A, T→C
+//!   Color 3: A→T, C→G, G→C, T→A
 
 /// Decode a colorspace-encoded sequence (primer base + color digits) into basespace.
 /// Returns None if the input is not valid colorspace.
@@ -72,7 +72,10 @@ pub fn is_colorspace(seq: &[u8]) -> bool {
         return false;
     }
     // First character must be a base
-    let first_is_base = matches!(seq[0], b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't');
+    let first_is_base = matches!(
+        seq[0],
+        b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'
+    );
     if !first_is_base {
         return false;
     }
