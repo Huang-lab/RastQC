@@ -1,6 +1,6 @@
+use super::{format_count_label, PhredEncoding, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{PhredEncoding, QCModule, QCResult, format_count_label};
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -145,7 +145,9 @@ impl QCModule for PerSequenceQuality {
         for (i, &score) in self.scores.iter().enumerate() {
             let x = ml + (score as f64 - min_score) / score_range * pw;
             let y = mt + ph * (1.0 - self.counts[i] / max_count);
-            if i > 0 { svg.push(' '); }
+            if i > 0 {
+                svg.push(' ');
+            }
             svg.push_str(&format!("{:.1},{:.1}", x, y));
         }
         svg.push_str(r##"" fill="none" stroke="#ff0000" stroke-width="2" />"##);
@@ -157,7 +159,9 @@ impl QCModule for PerSequenceQuality {
         ));
         svg.push_str(&format!(
             r##"<line x1="{ml}" y1="{}" x2="{}" y2="{}" stroke="black" />"##,
-            mt + ph, ml + pw, mt + ph
+            mt + ph,
+            ml + pw,
+            mt + ph
         ));
 
         // Y-axis ticks
@@ -181,7 +185,9 @@ impl QCModule for PerSequenceQuality {
                     let x = ml + (v as f64 - min_score) / score_range * pw;
                     svg.push_str(&format!(
                         r##"<text x="{}" y="{}" text-anchor="middle" font-size="10">{}</text>"##,
-                        x, mt + ph + 15.0, v
+                        x,
+                        mt + ph + 15.0,
+                        v
                     ));
                 }
                 v += step;

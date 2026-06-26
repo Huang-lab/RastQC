@@ -1,6 +1,6 @@
+use super::{format_count_label, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{QCModule, QCResult, format_count_label};
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -82,7 +82,11 @@ impl QCModule for SequenceLengthDist {
             return;
         }
 
-        let min = if self.min_length == usize::MAX { 0 } else { self.min_length };
+        let min = if self.min_length == usize::MAX {
+            0
+        } else {
+            self.min_length
+        };
         let max = self.max_length;
 
         self.multiple_lengths = self.length_counts.len() > 1;
@@ -110,8 +114,14 @@ impl QCModule for SequenceLengthDist {
             pos += interval;
         }
 
-        let warn_on = config.get_limit("sequence_length").map(|l| l.warn != 0.0).unwrap_or(true);
-        let error_on = config.get_limit("sequence_length").map(|l| l.error != 0.0).unwrap_or(true);
+        let warn_on = config
+            .get_limit("sequence_length")
+            .map(|l| l.warn != 0.0)
+            .unwrap_or(true);
+        let error_on = config
+            .get_limit("sequence_length")
+            .map(|l| l.error != 0.0)
+            .unwrap_or(true);
 
         self.qc_result = if self.has_zero_length && error_on {
             QCResult::Fail
@@ -166,7 +176,9 @@ impl QCModule for SequenceLengthDist {
         for (i, &count) in self.counts.iter().enumerate() {
             let x = ml + (i as f64 + 0.5) / n as f64 * pw;
             let y = mt + ph * (1.0 - count / max_count);
-            if i > 0 { svg.push(' '); }
+            if i > 0 {
+                svg.push(' ');
+            }
             svg.push_str(&format!("{:.1},{:.1}", x, y));
         }
         svg.push_str(r##"" fill="none" stroke="#ff0000" stroke-width="1.5" />"##);
@@ -177,7 +189,9 @@ impl QCModule for SequenceLengthDist {
         ));
         svg.push_str(&format!(
             r##"<line x1="{ml}" y1="{}" x2="{}" y2="{}" stroke="black" />"##,
-            mt + ph, ml + pw, mt + ph
+            mt + ph,
+            ml + pw,
+            mt + ph
         ));
 
         // Y-axis ticks

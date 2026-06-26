@@ -1,6 +1,6 @@
+use super::{format_count_label, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{QCModule, QCResult, format_count_label};
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -24,9 +24,9 @@ impl GCModel {
             let high_pct = ((high_count * 100.0) / read_length as f64).round() as usize;
             let high_pct = high_pct.min(100);
 
-            for p in low_pct..=high_pct {
-                claiming_counts[p] += 1;
-            }
+            claiming_counts[low_pct..=high_pct]
+                .iter_mut()
+                .for_each(|c| *c += 1);
         }
 
         // Second pass: build model values with weighted increments
@@ -40,9 +40,9 @@ impl GCModel {
             let high_pct = high_pct.min(100);
 
             let mut values = Vec::new();
-            for p in low_pct..=high_pct {
-                if claiming_counts[p] > 0 {
-                    values.push((p, 1.0 / claiming_counts[p] as f64));
+            for (p, &count) in (low_pct..=high_pct).zip(&claiming_counts[low_pct..=high_pct]) {
+                if count > 0 {
+                    values.push((p, 1.0 / count as f64));
                 }
             }
             models.push(values);
@@ -113,17 +113,16 @@ impl QCModule for PerSequenceGC {
             seq_len = truncated;
         }
 
-        for i in 0..seq_len {
-            match seq_bytes[i] {
-                b'G' | b'C' | b'g' | b'c' => gc_count += 1,
-                _ => {}
+        for &b in seq_bytes.iter().take(seq_len) {
+            if matches!(b, b'G' | b'C' | b'g' | b'c') {
+                gc_count += 1;
             }
         }
 
         // Get or create GCModel for this read length
-        if !self.gc_models.contains_key(&seq_len) {
-            self.gc_models.insert(seq_len, GCModel::new(seq_len));
-        }
+        self.gc_models
+            .entry(seq_len)
+            .or_insert_with(|| GCModel::new(seq_len));
         let model = &self.gc_models[&seq_len];
 
         // Distribute GC count across percentage bins using the model
@@ -163,8 +162,8 @@ impl QCModule for PerSequenceGC {
         // FastQC's bidirectional mode averaging:
         // Average indices where count > gcDistribution[firstMode] - gcDistribution[firstMode]/10
         // (i.e., within 90% of the peak height, walking outward from peak)
-        let threshold = self.gc_distribution[first_mode]
-            - (self.gc_distribution[first_mode] / 10.0);
+        let threshold =
+            self.gc_distribution[first_mode] - (self.gc_distribution[first_mode] / 10.0);
 
         let mut mode_sum = first_mode as f64;
         let mut mode_duplicates = 1usize;
@@ -228,8 +227,14 @@ impl QCModule for PerSequenceGC {
         }
         self.deviation_percent = deviation_sum / total * 100.0;
 
-        let warn = config.get_limit("gc_sequence").map(|l| l.warn).unwrap_or(15.0);
-        let error = config.get_limit("gc_sequence").map(|l| l.error).unwrap_or(30.0);
+        let warn = config
+            .get_limit("gc_sequence")
+            .map(|l| l.warn)
+            .unwrap_or(15.0);
+        let error = config
+            .get_limit("gc_sequence")
+            .map(|l| l.error)
+            .unwrap_or(30.0);
 
         self.qc_result = if self.deviation_percent > error {
             QCResult::Fail
@@ -286,7 +291,9 @@ impl QCModule for PerSequenceGC {
         for i in 0..=100 {
             let x = ml + i as f64 / 100.0 * pw;
             let y = mt + ph * (1.0 - self.gc_distribution[i] / max_count);
-            if i > 0 { svg.push(' '); }
+            if i > 0 {
+                svg.push(' ');
+            }
             svg.push_str(&format!("{:.1},{:.1}", x, y));
         }
         svg.push_str(r##"" fill="none" stroke="#ff0000" stroke-width="2" />"##);
@@ -296,10 +303,14 @@ impl QCModule for PerSequenceGC {
         for i in 0..=100 {
             let x = ml + i as f64 / 100.0 * pw;
             let y = mt + ph * (1.0 - self.theoretical[i] / max_count);
-            if i > 0 { svg.push(' '); }
+            if i > 0 {
+                svg.push(' ');
+            }
             svg.push_str(&format!("{:.1},{:.1}", x, y));
         }
-        svg.push_str(r##"" fill="none" stroke="#0000ff" stroke-width="1.5" stroke-dasharray="5,3" />"##);
+        svg.push_str(
+            r##"" fill="none" stroke="#0000ff" stroke-width="1.5" stroke-dasharray="5,3" />"##,
+        );
 
         // Axes
         svg.push_str(&format!(
@@ -308,7 +319,9 @@ impl QCModule for PerSequenceGC {
         ));
         svg.push_str(&format!(
             r##"<line x1="{ml}" y1="{}" x2="{}" y2="{}" stroke="black" />"##,
-            mt + ph, ml + pw, mt + ph
+            mt + ph,
+            ml + pw,
+            mt + ph
         ));
 
         // Y-axis ticks
@@ -328,18 +341,24 @@ impl QCModule for PerSequenceGC {
             let x = ml + v as f64 / 100.0 * pw;
             svg.push_str(&format!(
                 r##"<text x="{}" y="{}" text-anchor="middle" font-size="10">{}</text>"##,
-                x, mt + ph + 15.0, v
+                x,
+                mt + ph + 15.0,
+                v
             ));
         }
 
         // Legend
         svg.push_str(&format!(
             r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="#ff0000" stroke-width="2" />"##,
-            ml + pw - 150.0, mt + 10.0, ml + pw - 135.0, mt + 10.0
+            ml + pw - 150.0,
+            mt + 10.0,
+            ml + pw - 135.0,
+            mt + 10.0
         ));
         svg.push_str(&format!(
             r##"<text x="{}" y="{}" font-size="10">GC count per read</text>"##,
-            ml + pw - 130.0, mt + 14.0
+            ml + pw - 130.0,
+            mt + 14.0
         ));
         svg.push_str(&format!(
             r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="#0000ff" stroke-width="1.5" stroke-dasharray="5,3" />"##,
@@ -347,7 +366,8 @@ impl QCModule for PerSequenceGC {
         ));
         svg.push_str(&format!(
             r##"<text x="{}" y="{}" font-size="10">Theoretical distribution</text>"##,
-            ml + pw - 130.0, mt + 29.0
+            ml + pw - 130.0,
+            mt + 29.0
         ));
 
         svg.push_str(&format!(

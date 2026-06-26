@@ -181,7 +181,7 @@ mod tests {
         let path = std::env::temp_dir().join("rastqc_parallel_multimember_test.fastq.gz");
         std::fs::write(&path, &stream).unwrap();
 
-        let config = FastQCConfig::new(None, None, None, 7, false, 50, false).unwrap();
+        let config = FastQCConfig::new(None, None, None, 7, false, 50).unwrap();
         let (_modules, count) = process_file_parallel(&path, &config, 4).unwrap();
 
         let _ = std::fs::remove_file(&path);

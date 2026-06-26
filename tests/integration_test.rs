@@ -39,10 +39,13 @@ fn test_single_file_nozip() {
     let _ = fs::create_dir_all(&outdir);
     let input = outdir.join("test.fastq");
 
-    write_fastq(&input, &[
-        ("read1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII"),
-        ("read2", "GCTAGCTAGCTAGCTAGCTA", "IIIIIIIIIIIIIIIIIIII"),
-    ]);
+    write_fastq(
+        &input,
+        &[
+            ("read1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII"),
+            ("read2", "GCTAGCTAGCTAGCTAGCTA", "IIIIIIIIIIIIIIIIIIII"),
+        ],
+    );
 
     let output = Command::new(binary_path())
         .args(["--nozip", "--quiet", "-o"])
@@ -70,9 +73,10 @@ fn test_single_file_zip() {
     let _ = fs::create_dir_all(&outdir);
     let input = outdir.join("sample.fastq");
 
-    write_fastq(&input, &[
-        ("read1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII"),
-    ]);
+    write_fastq(
+        &input,
+        &[("read1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII")],
+    );
 
     let output = Command::new(binary_path())
         .args(["--quiet", "-o"])
@@ -85,11 +89,17 @@ fn test_single_file_zip() {
 
     let zip_path = outdir.join("sample_fastqc.zip");
     assert!(zip_path.exists(), "ZIP not created");
-    assert!(fs::metadata(&zip_path).unwrap().len() > 100, "ZIP too small");
+    assert!(
+        fs::metadata(&zip_path).unwrap().len() > 100,
+        "ZIP too small"
+    );
 
     // HTML should also be written alongside (for summary linking)
     let html_path = outdir.join("sample_fastqc.html");
-    assert!(html_path.exists(), "Standalone HTML not created alongside ZIP");
+    assert!(
+        html_path.exists(),
+        "Standalone HTML not created alongside ZIP"
+    );
 
     cleanup(&outdir);
 }
@@ -100,9 +110,10 @@ fn test_zip_with_extract() {
     let _ = fs::create_dir_all(&outdir);
     let input = outdir.join("sample.fastq");
 
-    write_fastq(&input, &[
-        ("read1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII"),
-    ]);
+    write_fastq(
+        &input,
+        &[("read1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII")],
+    );
 
     let output = Command::new(binary_path())
         .args(["--extract", "--quiet", "-o"])
@@ -128,14 +139,20 @@ fn test_multiple_files_summary() {
     let input1 = outdir.join("a.fastq");
     let input2 = outdir.join("b.fastq");
 
-    write_fastq(&input1, &[
-        ("r1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII"),
-        ("r2", "GCTAGCTAGCTAGCTAGCTA", "IIIIIIIIIIIIIIIIIIII"),
-    ]);
-    write_fastq(&input2, &[
-        ("r1", "AAAAAAAAAAAAAAAAAAAA", "IIIIIIIIIIIIIIIIIIII"),
-        ("r2", "TTTTTTTTTTTTTTTTTTTT", "IIIIIIIIIIIIIIIIIIII"),
-    ]);
+    write_fastq(
+        &input1,
+        &[
+            ("r1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII"),
+            ("r2", "GCTAGCTAGCTAGCTAGCTA", "IIIIIIIIIIIIIIIIIIII"),
+        ],
+    );
+    write_fastq(
+        &input2,
+        &[
+            ("r1", "AAAAAAAAAAAAAAAAAAAA", "IIIIIIIIIIIIIIIIIIII"),
+            ("r2", "TTTTTTTTTTTTTTTTTTTT", "IIIIIIIIIIIIIIIIIIII"),
+        ],
+    );
 
     let output = Command::new(binary_path())
         .args(["--nozip", "--summary", "--quiet", "-o"])
@@ -177,11 +194,14 @@ fn test_text_data_modules_present() {
     let _ = fs::create_dir_all(&outdir);
     let input = outdir.join("test.fastq");
 
-    write_fastq(&input, &[
-        ("r1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII"),
-        ("r2", "GCTAGCTAGCTAGCTAGCTA", "BBBBBBBBBBBBBBBBBBBB"),
-        ("r3", "NNNNNACTGACTGACTGACT", "IIIIIIIIIIIIIIIIIIII"),
-    ]);
+    write_fastq(
+        &input,
+        &[
+            ("r1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII"),
+            ("r2", "GCTAGCTAGCTAGCTAGCTA", "BBBBBBBBBBBBBBBBBBBB"),
+            ("r3", "NNNNNACTGACTGACTGACT", "IIIIIIIIIIIIIIIIIIII"),
+        ],
+    );
 
     let output = Command::new(binary_path())
         .args(["--extract", "--quiet", "--long-read", "-o"])
@@ -214,7 +234,11 @@ fn test_text_data_modules_present() {
 
     // Verify each module ends properly (12 original + 3 long-read = 15)
     let module_count = data.matches(">>END_MODULE").count();
-    assert!(module_count >= 15, "Expected >=15 END_MODULE markers, got {}", module_count);
+    assert!(
+        module_count >= 15,
+        "Expected >=15 END_MODULE markers, got {}",
+        module_count
+    );
 
     cleanup(&outdir);
 }
@@ -229,8 +253,12 @@ fn test_gzip_input() {
 
     // Write gzipped FASTQ
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    encoder.write_all(b"@read1\nACTGACTGACTG\n+\nIIIIIIIIIIII\n").unwrap();
-    encoder.write_all(b"@read2\nGCTAGCTAGCTA\n+\nIIIIIIIIIIII\n").unwrap();
+    encoder
+        .write_all(b"@read1\nACTGACTGACTG\n+\nIIIIIIIIIIII\n")
+        .unwrap();
+    encoder
+        .write_all(b"@read2\nGCTAGCTAGCTA\n+\nIIIIIIIIIIII\n")
+        .unwrap();
     let compressed = encoder.finish().unwrap();
     fs::write(&input, compressed).unwrap();
 
@@ -263,13 +291,9 @@ fn test_multimember_gzip_input() {
     // pigz/bgzip split output into multiple gzip blocks.
     let mut stream = Vec::new();
     for chunk in 0..2 {
-        let mut encoder =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         for i in 0..50 {
-            let record = format!(
-                "@read_{}_{}\nACTGACTGACTG\n+\nIIIIIIIIIIII\n",
-                chunk, i
-            );
+            let record = format!("@read_{}_{}\nACTGACTGACTG\n+\nIIIIIIIIIIII\n", chunk, i);
             encoder.write_all(record.as_bytes()).unwrap();
         }
         stream.extend_from_slice(&encoder.finish().unwrap());
@@ -310,8 +334,7 @@ fn test_stdin_gzip_autodetect() {
     // Two concatenated gzip members (pigz/bgzip-style), 100 records total.
     let mut stream = Vec::new();
     for chunk in 0..2 {
-        let mut encoder =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         for i in 0..50 {
             let record = format!("@r_{}_{}\nACGTACGTACGT\n+\nIIIIIIIIIIII\n", chunk, i);
             encoder.write_all(record.as_bytes()).unwrap();
@@ -331,7 +354,9 @@ fn test_stdin_gzip_autodetect() {
     // Write the compressed stream, then drop stdin to signal EOF before waiting.
     {
         let mut child_stdin = child.stdin.take().expect("no stdin handle");
-        child_stdin.write_all(&stream).expect("Failed to write to stdin");
+        child_stdin
+            .write_all(&stream)
+            .expect("Failed to write to stdin");
     }
     let status = child.wait().expect("Failed to wait");
 
@@ -375,7 +400,9 @@ fn test_stdin_bzip2_autodetect() {
 
     {
         let mut child_stdin = child.stdin.take().expect("no stdin handle");
-        child_stdin.write_all(&stream).expect("Failed to write to stdin");
+        child_stdin
+            .write_all(&stream)
+            .expect("Failed to write to stdin");
     }
     let status = child.wait().expect("Failed to wait");
 
@@ -455,9 +482,10 @@ fn test_summary_tsv_format() {
     let _ = fs::create_dir_all(&outdir);
 
     let input = outdir.join("s1.fastq");
-    write_fastq(&input, &[
-        ("r1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII"),
-    ]);
+    write_fastq(
+        &input,
+        &[("r1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII")],
+    );
 
     Command::new(binary_path())
         .args(["--nozip", "--summary", "--quiet", "-o"])

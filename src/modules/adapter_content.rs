@@ -1,6 +1,6 @@
+use super::{format_pct_label, BaseGroup, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{BaseGroup, QCModule, QCResult, format_pct_label};
 use std::any::Any;
 
 struct AdapterTracker {
@@ -155,10 +155,7 @@ impl QCModule for AdapterContent {
     }
 
     fn text_data(&self) -> String {
-        let mut out = format!(
-            ">>Adapter Content\t{}\n#Position",
-            self.result().label()
-        );
+        let mut out = format!(">>Adapter Content\t{}\n#Position", self.result().label());
 
         for adapter in &self.adapters {
             out.push_str(&format!("\t{}", adapter.name));
@@ -198,7 +195,9 @@ impl QCModule for AdapterContent {
 
         let max_val = self.max_enrichment.max(1.0);
 
-        let colors = ["#ff0000", "#0000ff", "#00cc00", "#ff8800", "#8800ff", "#00cccc"];
+        let colors = [
+            "#ff0000", "#0000ff", "#00cc00", "#ff8800", "#8800ff", "#00cccc",
+        ];
 
         let mut svg = format!(
             r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {} {}" font-family="Arial, sans-serif" font-size="11">"##,
@@ -213,7 +212,9 @@ impl QCModule for AdapterContent {
             for (gi, &val) in row.iter().enumerate() {
                 let x = ml + (gi as f64 + 0.5) / n as f64 * pw;
                 let y = mt + ph * (1.0 - val / max_val);
-                if gi > 0 { svg.push(' '); }
+                if gi > 0 {
+                    svg.push(' ');
+                }
                 svg.push_str(&format!("{:.1},{:.1}", x, y));
             }
             svg.push_str(&format!(
@@ -229,7 +230,9 @@ impl QCModule for AdapterContent {
         ));
         svg.push_str(&format!(
             r##"<line x1="{ml}" y1="{}" x2="{}" y2="{}" stroke="black" />"##,
-            mt + ph, ml + pw, mt + ph
+            mt + ph,
+            ml + pw,
+            mt + ph
         ));
 
         // Y-axis ticks
@@ -261,11 +264,13 @@ impl QCModule for AdapterContent {
             let y = mt + 10.0 + ai as f64 * 14.0;
             svg.push_str(&format!(
                 r##"<line x1="{}" y1="{y}" x2="{}" y2="{y}" stroke="{color}" stroke-width="2" />"##,
-                ml + pw - 200.0, ml + pw - 185.0
+                ml + pw - 200.0,
+                ml + pw - 185.0
             ));
             svg.push_str(&format!(
                 r##"<text x="{}" y="{y}" dominant-baseline="middle" font-size="9">{}</text>"##,
-                ml + pw - 180.0, adapter.name
+                ml + pw - 180.0,
+                adapter.name
             ));
         }
 

@@ -1,7 +1,6 @@
 use crate::modules::{QCModule, QCResult};
 use crate::FileSummary;
 use std::io::Write;
-use serde_json;
 
 pub fn generate_html_report(filename: &str, modules: &[Box<dyn QCModule>]) -> String {
     let mut html = String::with_capacity(64 * 1024);
@@ -20,10 +19,7 @@ pub fn generate_html_report(filename: &str, modules: &[Box<dyn QCModule>]) -> St
     // Header
     html.push_str("<div id=\"header\">\n");
     html.push_str("<h1>RastQC Report</h1>\n");
-    html.push_str(&format!(
-        "<h2>{}</h2>\n",
-        html_escape(filename)
-    ));
+    html.push_str(&format!("<h2>{}</h2>\n", html_escape(filename)));
     html.push_str("</div>\n");
 
     // Summary sidebar
@@ -76,8 +72,10 @@ pub fn generate_html_report(filename: &str, modules: &[Box<dyn QCModule>]) -> St
             }
         }
 
-        // For table-based modules (Basic Stats, Overrepresented Seqs, Kmer Content)
-        let text = module.text_data();
+        // For table-based modules (Basic Stats, Overrepresented Seqs, Kmer Content).
+        // Substitute the filename placeholder that BasicStats leaves in text_data().
+        let raw_text = module.text_data();
+        let text = raw_text.replacen("Filename\t{}", &format!("Filename\t{}", filename), 1);
         if !module.has_chart() {
             html.push_str(&text_data_to_html_table(&text));
         }
@@ -178,7 +176,10 @@ pub fn generate_multiqc_json(filename: &str, modules: &[Box<dyn QCModule>]) -> S
         let key = module.name().replace(' ', "_").to_lowercase();
         module_data.insert(key, module.json_data());
     }
-    top.insert("modules".to_string(), serde_json::Value::Object(module_data));
+    top.insert(
+        "modules".to_string(),
+        serde_json::Value::Object(module_data),
+    );
 
     serde_json::to_string_pretty(&serde_json::Value::Object(top)).unwrap_or_default()
 }
@@ -265,10 +266,7 @@ pub fn generate_summary_html(summaries: &[FileSummary]) -> String {
     // Header
     html.push_str("<div class=\"header\">\n");
     html.push_str("<h1>RastQC Summary</h1>\n");
-    html.push_str(&format!(
-        "<p>{} samples analysed</p>\n",
-        summaries.len()
-    ));
+    html.push_str(&format!("<p>{} samples analysed</p>\n", summaries.len()));
     html.push_str("</div>\n");
 
     // Tally
@@ -337,7 +335,9 @@ pub fn generate_summary_html(summaries: &[FileSummary]) -> String {
     html.push_str("</tbody>\n</table>\n</div>\n");
 
     // Footer
-    html.push_str("<div class=\"footer\"><p>Produced by <strong>RastQC</strong> v0.1.0</p></div>\n");
+    html.push_str(
+        "<div class=\"footer\"><p>Produced by <strong>RastQC</strong> v0.1.0</p></div>\n",
+    );
     html.push_str("</body>\n</html>");
     html
 }

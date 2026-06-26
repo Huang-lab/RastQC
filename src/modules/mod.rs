@@ -1,16 +1,16 @@
-pub mod basic_stats;
-pub mod per_base_quality;
-pub mod per_tile_quality;
-pub mod per_sequence_quality;
-pub mod per_base_content;
-pub mod per_sequence_gc;
-pub mod n_content;
-pub mod sequence_length;
-pub mod duplication;
-pub mod overrepresented;
 pub mod adapter_content;
+pub mod basic_stats;
+pub mod duplication;
 pub mod kmer_content;
 pub mod long_read_quality;
+pub mod n_content;
+pub mod overrepresented;
+pub mod per_base_content;
+pub mod per_base_quality;
+pub mod per_sequence_gc;
+pub mod per_sequence_quality;
+pub mod per_tile_quality;
+pub mod sequence_length;
 
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
@@ -99,10 +99,7 @@ pub trait QCModule: Send {
 /// Merge two module sets. Each module in `target` merges from the corresponding
 /// module in `source`. Both sets must have the same modules in the same order
 /// (as produced by ModuleFactory::create_modules).
-pub fn merge_module_sets(
-    target: &mut [Box<dyn QCModule>],
-    source: &mut [Box<dyn QCModule>],
-) {
+pub fn merge_module_sets(target: &mut [Box<dyn QCModule>], source: &mut [Box<dyn QCModule>]) {
     assert_eq!(target.len(), source.len());
     for (t, s) in target.iter_mut().zip(source.iter_mut()) {
         t.merge_from(s.as_mut());
@@ -135,7 +132,10 @@ fn text_data_to_json(text: &str, module_name: &str, result: QCResult) -> JsonVal
         let values: Vec<&str> = line.split('\t').collect();
         let mut row = serde_json::Map::new();
         for (i, val) in values.iter().enumerate() {
-            let key = headers.get(i).cloned().unwrap_or_else(|| format!("col_{}", i));
+            let key = headers
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("col_{}", i));
             // Try to parse as number
             if let Ok(n) = val.parse::<f64>() {
                 row.insert(key, serde_json::json!(n));
@@ -198,7 +198,11 @@ impl BaseGroup {
                 5
             } else if pos < 500 {
                 // 100-499: 5bp or 10bp depending on total len
-                if max_length > 200 { 10 } else { 5 }
+                if max_length > 200 {
+                    10
+                } else {
+                    5
+                }
             } else {
                 // 500+: 50bp
                 50
@@ -245,6 +249,90 @@ impl PhredEncoding {
             PhredEncoding::Illumina1_3 => "Illumina 1.3",
             PhredEncoding::Illumina1_5 => "Illumina 1.5",
         }
+    }
+}
+
+/// Format a numeric count for axis tick labels (e.g. 1500000 → "1.5M").
+pub fn format_count_label(n: f64) -> String {
+    if n >= 1_000_000.0 {
+        format!("{:.1}M", n / 1_000_000.0)
+    } else if n >= 1_000.0 {
+        format!("{:.1}K", n / 1_000.0)
+    } else if n == n.floor() {
+        format!("{}", n as u64)
+    } else {
+        format!("{:.1}", n)
+    }
+}
+
+/// Format a percentage value for axis tick labels.
+pub fn format_pct_label(n: f64) -> String {
+    if n == n.floor() {
+        format!("{}%", n as u64)
+    } else {
+        format!("{:.1}%", n)
+    }
+}
+
+/// Factory to create all modules
+pub struct ModuleFactory;
+
+impl ModuleFactory {
+    pub fn create_modules(config: &FastQCConfig) -> Vec<Box<dyn QCModule>> {
+        let mut modules: Vec<Box<dyn QCModule>> = Vec::new();
+
+        modules.push(Box::new(basic_stats::BasicStats::new()));
+
+        if !config.is_ignored("quality_base") {
+            modules.push(Box::new(per_base_quality::PerBaseQuality::new()));
+        }
+        if !config.is_ignored("tile") {
+            modules.push(Box::new(per_tile_quality::PerTileQuality::new()));
+        }
+        if !config.is_ignored("quality_sequence") {
+            modules.push(Box::new(per_sequence_quality::PerSequenceQuality::new()));
+        }
+        if !config.is_ignored("sequence") {
+            modules.push(Box::new(per_base_content::PerBaseContent::new()));
+        }
+        if !config.is_ignored("gc_sequence") {
+            modules.push(Box::new(per_sequence_gc::PerSequenceGC::new()));
+        }
+        if !config.is_ignored("n_content") {
+            modules.push(Box::new(n_content::NContent::new()));
+        }
+        if !config.is_ignored("sequence_length") {
+            modules.push(Box::new(sequence_length::SequenceLengthDist::new()));
+        }
+        if !config.is_ignored("duplication") {
+            modules.push(Box::new(duplication::DuplicationLevel::new(
+                config.dup_length,
+            )));
+        }
+        if !config.is_ignored("overrepresented") {
+            modules.push(Box::new(overrepresented::OverrepresentedSeqs::new(
+                config.dup_length,
+            )));
+        }
+        if !config.is_ignored("adapter") {
+            modules.push(Box::new(adapter_content::AdapterContent::new(config)));
+        }
+        if !config.is_ignored("kmer") {
+            modules.push(Box::new(kmer_content::KmerContent::new(config.kmer_size)));
+        }
+
+        // Long-read QC metrics
+        if !config.is_ignored("read_length_n50") {
+            modules.push(Box::new(long_read_quality::ReadLengthN50::new()));
+        }
+        if !config.is_ignored("quality_stratified_length") {
+            modules.push(Box::new(long_read_quality::QualityStratifiedLength::new()));
+        }
+        if !config.is_ignored("homopolymer") {
+            modules.push(Box::new(long_read_quality::HomopolymerErrors::new()));
+        }
+
+        modules
     }
 }
 
@@ -305,85 +393,5 @@ mod tests {
         assert_eq!(QCResult::Pass.label(), "PASS");
         assert_eq!(QCResult::Warn.label(), "WARN");
         assert_eq!(QCResult::Fail.label(), "FAIL");
-    }
-}
-
-/// Format a numeric count for axis tick labels (e.g. 1500000 → "1.5M").
-pub fn format_count_label(n: f64) -> String {
-    if n >= 1_000_000.0 {
-        format!("{:.1}M", n / 1_000_000.0)
-    } else if n >= 1_000.0 {
-        format!("{:.1}K", n / 1_000.0)
-    } else if n == n.floor() {
-        format!("{}", n as u64)
-    } else {
-        format!("{:.1}", n)
-    }
-}
-
-/// Format a percentage value for axis tick labels.
-pub fn format_pct_label(n: f64) -> String {
-    if n == n.floor() {
-        format!("{}%", n as u64)
-    } else {
-        format!("{:.1}%", n)
-    }
-}
-
-/// Factory to create all modules
-pub struct ModuleFactory;
-
-impl ModuleFactory {
-    pub fn create_modules(config: &FastQCConfig) -> Vec<Box<dyn QCModule>> {
-        let mut modules: Vec<Box<dyn QCModule>> = Vec::new();
-
-        modules.push(Box::new(basic_stats::BasicStats::new()));
-
-        if !config.is_ignored("quality_base") {
-            modules.push(Box::new(per_base_quality::PerBaseQuality::new()));
-        }
-        if !config.is_ignored("tile") {
-            modules.push(Box::new(per_tile_quality::PerTileQuality::new()));
-        }
-        if !config.is_ignored("quality_sequence") {
-            modules.push(Box::new(per_sequence_quality::PerSequenceQuality::new()));
-        }
-        if !config.is_ignored("sequence") {
-            modules.push(Box::new(per_base_content::PerBaseContent::new()));
-        }
-        if !config.is_ignored("gc_sequence") {
-            modules.push(Box::new(per_sequence_gc::PerSequenceGC::new()));
-        }
-        if !config.is_ignored("n_content") {
-            modules.push(Box::new(n_content::NContent::new()));
-        }
-        if !config.is_ignored("sequence_length") {
-            modules.push(Box::new(sequence_length::SequenceLengthDist::new()));
-        }
-        if !config.is_ignored("duplication") {
-            modules.push(Box::new(duplication::DuplicationLevel::new(config.dup_length)));
-        }
-        if !config.is_ignored("overrepresented") {
-            modules.push(Box::new(overrepresented::OverrepresentedSeqs::new(config.dup_length)));
-        }
-        if !config.is_ignored("adapter") {
-            modules.push(Box::new(adapter_content::AdapterContent::new(config)));
-        }
-        if !config.is_ignored("kmer") {
-            modules.push(Box::new(kmer_content::KmerContent::new(config.kmer_size)));
-        }
-
-        // Long-read QC metrics
-        if !config.is_ignored("read_length_n50") {
-            modules.push(Box::new(long_read_quality::ReadLengthN50::new()));
-        }
-        if !config.is_ignored("quality_stratified_length") {
-            modules.push(Box::new(long_read_quality::QualityStratifiedLength::new()));
-        }
-        if !config.is_ignored("homopolymer") {
-            modules.push(Box::new(long_read_quality::HomopolymerErrors::new()));
-        }
-
-        modules
     }
 }

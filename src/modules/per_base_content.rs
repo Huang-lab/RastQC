@@ -1,6 +1,6 @@
+use super::{BaseGroup, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{BaseGroup, QCModule, QCResult};
 use std::any::Any;
 
 pub struct PerBaseContent {
@@ -77,7 +77,10 @@ impl QCModule for PerBaseContent {
         self.groups = BaseGroup::make_groups(self.a_counts.len());
 
         let warn = config.get_limit("sequence").map(|l| l.warn).unwrap_or(10.0);
-        let error = config.get_limit("sequence").map(|l| l.error).unwrap_or(20.0);
+        let error = config
+            .get_limit("sequence")
+            .map(|l| l.error)
+            .unwrap_or(20.0);
 
         self.qc_result = QCResult::Pass;
 
@@ -181,7 +184,9 @@ impl QCModule for PerBaseContent {
             for (i, &val) in data.iter().enumerate() {
                 let x = ml + (i as f64 + 0.5) / n as f64 * pw;
                 let y = mt + ph * (1.0 - val / 100.0);
-                if i > 0 { svg.push(' '); }
+                if i > 0 {
+                    svg.push(' ');
+                }
                 svg.push_str(&format!("{:.1},{:.1}", x, y));
             }
             svg.push_str(&format!(
@@ -197,7 +202,9 @@ impl QCModule for PerBaseContent {
         ));
         svg.push_str(&format!(
             r##"<line x1="{ml}" y1="{}" x2="{}" y2="{}" stroke="black" />"##,
-            mt + ph, ml + pw, mt + ph
+            mt + ph,
+            ml + pw,
+            mt + ph
         ));
 
         // Y axis tick labels
@@ -227,11 +234,17 @@ impl QCModule for PerBaseContent {
             let y = legend_y + i as f64 * 15.0;
             svg.push_str(&format!(
                 r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="2" />"##,
-                legend_x, y, legend_x + 15.0, y, color
+                legend_x,
+                y,
+                legend_x + 15.0,
+                y,
+                color
             ));
             svg.push_str(&format!(
                 r##"<text x="{}" y="{}" dominant-baseline="middle" font-size="10">{}</text>"##,
-                legend_x + 20.0, y, label
+                legend_x + 20.0,
+                y,
+                label
             ));
         }
 

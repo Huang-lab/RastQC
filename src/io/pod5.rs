@@ -42,29 +42,20 @@ impl Pod5Reader {
             let schema = batch.schema();
 
             // Look for sequence and quality columns
-            let seq_col = schema
-                .fields()
-                .iter()
-                .position(|f| {
-                    let name = f.name().to_lowercase();
-                    name == "sequence" || name == "basecall" || name == "read_sequence"
-                });
+            let seq_col = schema.fields().iter().position(|f| {
+                let name = f.name().to_lowercase();
+                name == "sequence" || name == "basecall" || name == "read_sequence"
+            });
 
-            let qual_col = schema
-                .fields()
-                .iter()
-                .position(|f| {
-                    let name = f.name().to_lowercase();
-                    name == "quality" || name == "basecall_quality" || name == "read_quality"
-                });
+            let qual_col = schema.fields().iter().position(|f| {
+                let name = f.name().to_lowercase();
+                name == "quality" || name == "basecall_quality" || name == "read_quality"
+            });
 
-            let id_col = schema
-                .fields()
-                .iter()
-                .position(|f| {
-                    let name = f.name().to_lowercase();
-                    name == "read_id" || name == "id"
-                });
+            let id_col = schema.fields().iter().position(|f| {
+                let name = f.name().to_lowercase();
+                name == "read_id" || name == "id"
+            });
 
             if let (Some(si), Some(qi)) = (seq_col, qual_col) {
                 let seq_array = batch
@@ -91,7 +82,13 @@ impl Pod5Reader {
                         let seq_str = seqs.value(row);
                         let qual_str = quals.value(row);
                         let read_id = id_array
-                            .and_then(|a| if a.is_null(row) { None } else { Some(a.value(row)) })
+                            .and_then(|a| {
+                                if a.is_null(row) {
+                                    None
+                                } else {
+                                    Some(a.value(row))
+                                }
+                            })
                             .unwrap_or("unknown");
 
                         sequences.push(Sequence {

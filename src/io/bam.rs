@@ -22,7 +22,7 @@ impl BamReader {
     pub fn open(path: &Path) -> Result<Self> {
         let file =
             File::open(path).with_context(|| format!("Cannot open BAM: {}", path.display()))?;
-        let mut reader = bam::io::reader::Builder::default().build_from_reader(BufReader::new(file));
+        let mut reader = bam::io::reader::Builder.build_from_reader(BufReader::new(file));
         let _header = reader.read_header()?;
 
         Ok(BamReader::Bam { reader })
@@ -66,10 +66,7 @@ fn bam_record_to_sequence(record: &bam::Record) -> Result<Option<Sequence>> {
         return Ok(None);
     }
 
-    let name = record
-        .name()
-        .map(|n| n.to_string())
-        .unwrap_or_default();
+    let name = record.name().map(|n| n.to_string()).unwrap_or_default();
 
     // Extract sequence bases
     let seq_data = record.sequence();
@@ -110,26 +107,20 @@ fn sam_record_to_sequence(record: &sam::Record) -> Result<Option<Sequence>> {
         return Ok(None);
     }
 
-    let name = record
-        .name()
-        .map(|n| n.to_string())
-        .unwrap_or_default();
+    let name = record.name().map(|n| n.to_string()).unwrap_or_default();
 
     let seq_data = record.sequence();
     let seq_len = seq_data.len();
     let mut sequence = Vec::with_capacity(seq_len);
     for i in 0..seq_len {
         let base = match seq_data.get(i) {
-            Some(b) => {
-                let c: u8 = b.into();
-                match c.to_ascii_uppercase() {
-                    b'A' => b'A',
-                    b'C' => b'C',
-                    b'G' => b'G',
-                    b'T' => b'T',
-                    _ => b'N',
-                }
-            }
+            Some(b) => match b.to_ascii_uppercase() {
+                b'A' => b'A',
+                b'C' => b'C',
+                b'G' => b'G',
+                b'T' => b'T',
+                _ => b'N',
+            },
             None => b'N',
         };
         sequence.push(base);

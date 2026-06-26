@@ -8,7 +8,7 @@ mod report;
 use anyhow::Result;
 use clap::Parser;
 use rayon::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -156,7 +156,9 @@ fn run() -> Result<ExitCode> {
     }
 
     if cli.files.is_empty() {
-        anyhow::bail!("No input files specified. Pass file paths or use --stdin to read from standard input.");
+        anyhow::bail!(
+            "No input files specified. Pass file paths or use --stdin to read from standard input."
+        );
     }
 
     // Auto-detect long-read mode from file extensions
@@ -173,7 +175,6 @@ fn run() -> Result<ExitCode> {
         cli.kmer_size,
         cli.nofilter,
         cli.dup_length,
-        long_read,
     )?;
 
     if long_read {
@@ -246,7 +247,12 @@ fn run() -> Result<ExitCode> {
 
     // Print final tally
     if !cli.quiet {
-        print_final_tally(&summaries, total_files, total_start.elapsed().as_secs_f64(), cli.time);
+        print_final_tally(
+            &summaries,
+            total_files,
+            total_start.elapsed().as_secs_f64(),
+            cli.time,
+        );
     }
 
     // Write multi-file summary if requested (or auto-enable for 2+ files)
@@ -260,7 +266,11 @@ fn run() -> Result<ExitCode> {
         std::fs::write(&html_path, &html)?;
 
         if !cli.quiet {
-            eprintln!("Summary: {} and {}", tsv_path.display(), html_path.display());
+            eprintln!(
+                "Summary: {} and {}",
+                tsv_path.display(),
+                html_path.display()
+            );
         }
     }
 
@@ -290,8 +300,8 @@ fn run() -> Result<ExitCode> {
 }
 
 fn process_file(
-    file: &PathBuf,
-    outdir: &PathBuf,
+    file: &Path,
+    outdir: &Path,
     config: &FastQCConfig,
     cli: &Cli,
 ) -> Result<FileSummary> {
@@ -300,29 +310,30 @@ fn process_file(
 
     // Choose between streaming parallel and sequential processing
     let qc_start = Instant::now();
-    let (qc_modules, count) = if !is_stdin && !cli.no_parallel && parallel::should_use_parallel(file) {
-        parallel::process_file_parallel(file, config, cli.threads)?
-    } else {
-        let mut reader = if is_stdin {
-            SequenceReader::from_stdin()
+    let (qc_modules, count) =
+        if !is_stdin && !cli.no_parallel && parallel::should_use_parallel(file) {
+            parallel::process_file_parallel(file, config, cli.threads)?
         } else {
-            SequenceReader::open(file)?
-        };
-        let mut qc_modules = ModuleFactory::create_modules(config);
+            let mut reader = if is_stdin {
+                SequenceReader::from_stdin()
+            } else {
+                SequenceReader::open(file)?
+            };
+            let mut qc_modules = ModuleFactory::create_modules(config);
 
-        let mut count: u64 = 0;
-        while let Some(seq) = reader.next_sequence()? {
-            for module in &mut qc_modules {
-                module.process_sequence(&seq);
+            let mut count: u64 = 0;
+            while let Some(seq) = reader.next_sequence()? {
+                for module in &mut qc_modules {
+                    module.process_sequence(&seq);
+                }
+                count += 1;
             }
-            count += 1;
-        }
 
-        for module in &mut qc_modules {
-            module.calculate_results(config);
-        }
-        (qc_modules, count)
-    };
+            for module in &mut qc_modules {
+                module.calculate_results(config);
+            }
+            (qc_modules, count)
+        };
     let read_and_qc_secs = qc_start.elapsed().as_secs_f64();
 
     // Determine output base name
@@ -453,10 +464,7 @@ fn format_count(n: u64) -> String {
 fn print_final_tally(summaries: &[FileSummary], total_files: usize, elapsed: f64, show_time: bool) {
     eprintln!();
     eprintln!("=== Analysis complete ===");
-    eprintln!(
-        "{} file(s) processed in {:.1}s",
-        total_files, elapsed
-    );
+    eprintln!("{} file(s) processed in {:.1}s", total_files, elapsed);
 
     let mut total_pass = 0usize;
     let mut total_warn = 0usize;
@@ -494,16 +502,10 @@ fn print_final_tally(summaries: &[FileSummary], total_files: usize, elapsed: f64
     );
 
     if files_with_fail > 0 {
-        eprintln!(
-            "Files with failures: {}/{}",
-            files_with_fail, total_files
-        );
+        eprintln!("Files with failures: {}/{}", files_with_fail, total_files);
     }
     if files_with_warn > 0 {
-        eprintln!(
-            "Files with warnings: {}/{}",
-            files_with_warn, total_files
-        );
+        eprintln!("Files with warnings: {}/{}", files_with_warn, total_files);
     }
 
     // List files with failures
@@ -527,7 +529,10 @@ fn print_final_tally(summaries: &[FileSummary], total_files: usize, elapsed: f64
     if show_time {
         eprintln!();
         eprintln!("--- Timing breakdown ---");
-        eprintln!("{:<35} {:>8} {:>8} {:>8} {:>8}", "File", "QC", "Report", "IO", "Total");
+        eprintln!(
+            "{:<35} {:>8} {:>8} {:>8} {:>8}",
+            "File", "QC", "Report", "IO", "Total"
+        );
         let mut sum_qc = 0.0_f64;
         let mut sum_report = 0.0_f64;
         let mut sum_io = 0.0_f64;
@@ -549,7 +554,10 @@ fn print_final_tally(summaries: &[FileSummary], total_files: usize, elapsed: f64
             }
         }
         if summaries.len() > 1 {
-            eprintln!("{:<35} {:>7.2}s {:>7.3}s {:>7.3}s {:>7.2}s", "SUM (cpu-time)", sum_qc, sum_report, sum_io, sum_total);
+            eprintln!(
+                "{:<35} {:>7.2}s {:>7.3}s {:>7.3}s {:>7.2}s",
+                "SUM (cpu-time)", sum_qc, sum_report, sum_io, sum_total
+            );
             eprintln!("Wall-clock: {:.2}s", elapsed);
         }
     }

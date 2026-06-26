@@ -1,7 +1,7 @@
-use std::any::Any;
+use super::{PhredEncoding, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{PhredEncoding, QCModule, QCResult};
+use std::any::Any;
 
 pub struct BasicStats {
     total_sequences: u64,
@@ -45,7 +45,11 @@ impl BasicStats {
 
     #[allow(dead_code)]
     pub fn min_length(&self) -> usize {
-        if self.min_length == usize::MAX { 0 } else { self.min_length }
+        if self.min_length == usize::MAX {
+            0
+        } else {
+            self.min_length
+        }
     }
 
     #[allow(dead_code)]
@@ -204,7 +208,7 @@ mod tests {
     }
 
     fn default_config() -> FastQCConfig {
-        FastQCConfig::new(None, None, None, 7, false, 50, false).unwrap()
+        FastQCConfig::new(None, None, None, 7, false, 50).unwrap()
     }
 
     #[test]

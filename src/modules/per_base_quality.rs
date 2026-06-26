@@ -1,7 +1,7 @@
-use std::any::Any;
+use super::{BaseGroup, PhredEncoding, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{BaseGroup, PhredEncoding, QCModule, QCResult};
+use std::any::Any;
 
 /// Tracks quality value frequencies at each position
 struct QualityCount {
@@ -229,12 +229,7 @@ impl QCModule for PerBaseQuality {
         let plot_h = height - margin_top - margin_bottom;
 
         let n = self.groups.len();
-        let max_q: f64 = self
-            .p90
-            .iter()
-            .copied()
-            .fold(0.0_f64, f64::max)
-            .max(40.0);
+        let max_q: f64 = self.p90.iter().copied().fold(0.0_f64, f64::max).max(40.0);
 
         let bar_w = plot_w / n as f64;
 
@@ -291,11 +286,17 @@ impl QCModule for PerBaseQuality {
             let cap_w = bar_w * 0.3;
             svg.push_str(&format!(
                 r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="#333" stroke-width="0.5" />"##,
-                cx - cap_w, y_p90, cx + cap_w, y_p90
+                cx - cap_w,
+                y_p90,
+                cx + cap_w,
+                y_p90
             ));
             svg.push_str(&format!(
                 r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="#333" stroke-width="0.5" />"##,
-                cx - cap_w, y_p10, cx + cap_w, y_p10
+                cx - cap_w,
+                y_p10,
+                cx + cap_w,
+                y_p10
             ));
 
             // IQR box

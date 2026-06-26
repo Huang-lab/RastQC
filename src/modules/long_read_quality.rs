@@ -3,8 +3,8 @@ use crate::io::Sequence;
 use crate::modules::{QCModule, QCResult};
 use std::any::Any;
 
-/// Long-read QC metrics: N50, quality-stratified length distribution,
-/// and homopolymer error rates. Designed for PacBio HiFi and Oxford Nanopore data.
+// Long-read QC metrics: N50, quality-stratified length distribution,
+// and homopolymer error rates. Designed for PacBio HiFi and Oxford Nanopore data.
 
 // ─── Read Length N50 & Statistics ────────────────────────────────────────────
 
@@ -240,10 +240,10 @@ impl QCModule for QualityStratifiedLength {
             self.qc_result.label()
         ));
         text.push_str("#Quality Tier\tRead Count\tTotal Bases\tMean Length\n");
-        for i in 0..5 {
+        for (i, label) in TIER_LABELS.iter().enumerate() {
             text.push_str(&format!(
                 "{}\t{}\t{}\t{:.1}\n",
-                TIER_LABELS[i], self.tier_counts[i], self.tier_total_bases[i], self.tier_mean_length[i]
+                label, self.tier_counts[i], self.tier_total_bases[i], self.tier_mean_length[i]
             ));
         }
         text.push_str(">>END_MODULE\n");

@@ -1,6 +1,6 @@
+use super::{QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
-use super::{QCModule, QCResult};
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -38,19 +38,6 @@ impl OverrepresentedSeqs {
             overrep_entries: Vec::new(),
             qc_result: QCResult::NotRun,
         }
-    }
-
-    /// Expose sequence counts for the Duplication module (mirrors FastQC architecture)
-    pub fn sequence_counts(&self) -> &HashMap<Vec<u8>, u64> {
-        &self.sequences
-    }
-
-    pub fn count_at_unique_limit(&self) -> u64 {
-        self.count_at_limit
-    }
-
-    pub fn total_sequence_count(&self) -> u64 {
-        self.total_count
     }
 
     fn find_contaminant(seq: &[u8], config: &FastQCConfig) -> String {
@@ -159,7 +146,8 @@ impl QCModule for OverrepresentedSeqs {
         // Truncate and uppercase into reusable buffer (zero allocation in steady state)
         let end = seq.sequence.len().min(self.dup_length);
         self.upper_buf.clear();
-        self.upper_buf.extend(seq.sequence[..end].iter().map(|b| b.to_ascii_uppercase()));
+        self.upper_buf
+            .extend(seq.sequence[..end].iter().map(|b| b.to_ascii_uppercase()));
 
         if self.reached_limit {
             if let Some(count) = self.sequences.get_mut(&self.upper_buf) {
