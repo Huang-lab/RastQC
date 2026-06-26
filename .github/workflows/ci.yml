@@ -39,7 +39,7 @@ jobs:
         run: cargo test --workspace --tests
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Format check
         run: cargo fmt --all -- --check

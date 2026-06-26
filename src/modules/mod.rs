@@ -252,66 +252,6 @@ impl PhredEncoding {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_base_group_single_position() {
-        let groups = BaseGroup::make_groups(5);
-        assert_eq!(groups.len(), 5);
-        assert_eq!(groups[0].label(), "1");
-        assert_eq!(groups[4].label(), "5");
-    }
-
-    #[test]
-    fn test_base_group_short_reads() {
-        let groups = BaseGroup::make_groups(50);
-        // 9 individual (pos 0-8) + 5-bp bins for 9-49 = 9 + ceil(41/5) = 9 + 9 = 18
-        assert_eq!(groups.len(), 18);
-        assert_eq!(groups[0].label(), "1"); // first individual
-        assert_eq!(groups[8].label(), "9"); // last individual
-        assert_eq!(groups[9].label(), "10-14"); // first 5-bp bin
-        assert_eq!(groups.last().unwrap().end, 49);
-    }
-
-    #[test]
-    fn test_base_group_long_reads() {
-        let groups = BaseGroup::make_groups(150);
-        assert!(groups.len() < 150); // should bin
-        assert_eq!(groups[0].start, 0);
-        assert_eq!(groups[0].end, 0); // first 9 individual
-        assert_eq!(groups.last().unwrap().end, 149);
-    }
-
-    #[test]
-    fn test_base_group_empty() {
-        let groups = BaseGroup::make_groups(0);
-        assert!(groups.is_empty());
-    }
-
-    #[test]
-    fn test_phred_sanger() {
-        assert_eq!(PhredEncoding::detect(33), PhredEncoding::Sanger);
-        assert_eq!(PhredEncoding::detect(50), PhredEncoding::Sanger);
-        assert_eq!(PhredEncoding::Sanger.offset(), 33);
-    }
-
-    #[test]
-    fn test_phred_illumina() {
-        assert_eq!(PhredEncoding::detect(65), PhredEncoding::Illumina1_3);
-        assert_eq!(PhredEncoding::detect(66), PhredEncoding::Illumina1_5);
-        assert_eq!(PhredEncoding::Illumina1_3.offset(), 64);
-    }
-
-    #[test]
-    fn test_qc_result_labels() {
-        assert_eq!(QCResult::Pass.label(), "PASS");
-        assert_eq!(QCResult::Warn.label(), "WARN");
-        assert_eq!(QCResult::Fail.label(), "FAIL");
-    }
-}
-
 /// Format a numeric count for axis tick labels (e.g. 1500000 → "1.5M").
 pub fn format_count_label(n: f64) -> String {
     if n >= 1_000_000.0 {
@@ -393,5 +333,65 @@ impl ModuleFactory {
         }
 
         modules
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_base_group_single_position() {
+        let groups = BaseGroup::make_groups(5);
+        assert_eq!(groups.len(), 5);
+        assert_eq!(groups[0].label(), "1");
+        assert_eq!(groups[4].label(), "5");
+    }
+
+    #[test]
+    fn test_base_group_short_reads() {
+        let groups = BaseGroup::make_groups(50);
+        // 9 individual (pos 0-8) + 5-bp bins for 9-49 = 9 + ceil(41/5) = 9 + 9 = 18
+        assert_eq!(groups.len(), 18);
+        assert_eq!(groups[0].label(), "1"); // first individual
+        assert_eq!(groups[8].label(), "9"); // last individual
+        assert_eq!(groups[9].label(), "10-14"); // first 5-bp bin
+        assert_eq!(groups.last().unwrap().end, 49);
+    }
+
+    #[test]
+    fn test_base_group_long_reads() {
+        let groups = BaseGroup::make_groups(150);
+        assert!(groups.len() < 150); // should bin
+        assert_eq!(groups[0].start, 0);
+        assert_eq!(groups[0].end, 0); // first 9 individual
+        assert_eq!(groups.last().unwrap().end, 149);
+    }
+
+    #[test]
+    fn test_base_group_empty() {
+        let groups = BaseGroup::make_groups(0);
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn test_phred_sanger() {
+        assert_eq!(PhredEncoding::detect(33), PhredEncoding::Sanger);
+        assert_eq!(PhredEncoding::detect(50), PhredEncoding::Sanger);
+        assert_eq!(PhredEncoding::Sanger.offset(), 33);
+    }
+
+    #[test]
+    fn test_phred_illumina() {
+        assert_eq!(PhredEncoding::detect(65), PhredEncoding::Illumina1_3);
+        assert_eq!(PhredEncoding::detect(66), PhredEncoding::Illumina1_5);
+        assert_eq!(PhredEncoding::Illumina1_3.offset(), 64);
+    }
+
+    #[test]
+    fn test_qc_result_labels() {
+        assert_eq!(QCResult::Pass.label(), "PASS");
+        assert_eq!(QCResult::Warn.label(), "WARN");
+        assert_eq!(QCResult::Fail.label(), "FAIL");
     }
 }

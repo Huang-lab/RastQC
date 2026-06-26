@@ -218,6 +218,56 @@ fn parse_limits(content: &str) -> HashMap<String, ModuleLimits> {
     limits
 }
 
+fn default_limits() -> HashMap<String, ModuleLimits> {
+    let content = "\
+duplication\tignore\t0
+kmer\tignore\t0
+n_content\tignore\t0
+overrepresented\tignore\t0
+quality_base\tignore\t0
+sequence\tignore\t0
+gc_sequence\tignore\t0
+quality_sequence\tignore\t0
+tile\tignore\t0
+sequence_length\tignore\t0
+adapter\tignore\t0
+duplication\twarn\t70
+duplication\terror\t50
+kmer\twarn\t2
+kmer\terror\t5
+n_content\twarn\t5
+n_content\terror\t20
+overrepresented\twarn\t0.1
+overrepresented\terror\t1
+quality_base_lower\twarn\t10
+quality_base_lower\terror\t5
+quality_base_median\twarn\t25
+quality_base_median\terror\t20
+sequence\twarn\t10
+sequence\terror\t20
+gc_sequence\twarn\t15
+gc_sequence\terror\t30
+quality_sequence\twarn\t27
+quality_sequence\terror\t20
+tile\twarn\t5
+tile\terror\t10
+sequence_length\twarn\t1
+sequence_length\terror\t1
+adapter\twarn\t5
+adapter\terror\t10
+read_length_n50\tignore\t1
+read_length_n50\twarn\t0
+read_length_n50\terror\t0
+quality_stratified_length\tignore\t1
+quality_stratified_length\twarn\t0
+quality_stratified_length\terror\t0
+homopolymer\tignore\t1
+homopolymer\twarn\t5
+homopolymer\terror\t10";
+
+    parse_limits(content)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,54 +332,4 @@ mod tests {
         assert!(!config.is_ignored("kmer")); // kmer enabled by default
         assert!(!config.is_ignored("quality_base"));
     }
-}
-
-fn default_limits() -> HashMap<String, ModuleLimits> {
-    let content = "\
-duplication\tignore\t0
-kmer\tignore\t0
-n_content\tignore\t0
-overrepresented\tignore\t0
-quality_base\tignore\t0
-sequence\tignore\t0
-gc_sequence\tignore\t0
-quality_sequence\tignore\t0
-tile\tignore\t0
-sequence_length\tignore\t0
-adapter\tignore\t0
-duplication\twarn\t70
-duplication\terror\t50
-kmer\twarn\t2
-kmer\terror\t5
-n_content\twarn\t5
-n_content\terror\t20
-overrepresented\twarn\t0.1
-overrepresented\terror\t1
-quality_base_lower\twarn\t10
-quality_base_lower\terror\t5
-quality_base_median\twarn\t25
-quality_base_median\terror\t20
-sequence\twarn\t10
-sequence\terror\t20
-gc_sequence\twarn\t15
-gc_sequence\terror\t30
-quality_sequence\twarn\t27
-quality_sequence\terror\t20
-tile\twarn\t5
-tile\terror\t10
-sequence_length\twarn\t1
-sequence_length\terror\t1
-adapter\twarn\t5
-adapter\terror\t10
-read_length_n50\tignore\t1
-read_length_n50\twarn\t0
-read_length_n50\terror\t0
-quality_stratified_length\tignore\t1
-quality_stratified_length\twarn\t0
-quality_stratified_length\terror\t0
-homopolymer\tignore\t1
-homopolymer\twarn\t5
-homopolymer\terror\t10";
-
-    parse_limits(content)
 }
