@@ -146,11 +146,30 @@ pub fn process_file_parallel(
     Ok((final_modules, total_count))
 }
 
+/// Estimate decompressed size from on-disk size and file extension.
+///
+/// FASTQ compresses well (gzip/bzip2 typically ~4x for base-call data), so
+/// gating parallelism on the compressed on-disk size keeps the common case
+/// — a `.fastq.gz` well under 50 MB on disk but hundreds of MB decompressed
+/// — on the slower serial path, losing most of the benefit parallel
+/// processing is meant to provide for exactly this input type. Multi-member
+/// gzip (bgzip/pigz) streams make the gzip ISIZE trailer unreliable as an
+/// exact size, so this uses a conservative fixed-ratio estimate instead of
+/// decoding.
+fn estimate_decompressed_size(on_disk_size: u64, extension: Option<&str>) -> u64 {
+    match extension {
+        Some("gz") | Some("bz2") => on_disk_size.saturating_mul(4),
+        _ => on_disk_size,
+    }
+}
+
 /// Check if a file is large enough to benefit from parallel processing.
 pub fn should_use_parallel(path: &Path) -> bool {
-    path.metadata()
-        .map(|m| m.len() > 50 * 1024 * 1024) // > 50 MB
-        .unwrap_or(false)
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    let extension = path.extension().and_then(|e| e.to_str());
+    estimate_decompressed_size(metadata.len(), extension) > 50 * 1024 * 1024
 }
 
 #[cfg(test)]
@@ -158,6 +177,34 @@ mod tests {
     use super::*;
     use crate::config::FastQCConfig;
     use std::io::Write;
+
+    #[test]
+    fn estimate_decompressed_size_scales_compressed_extensions() {
+        // A 13 MB .fastq.gz is estimated at 52 MB decompressed, crossing the
+        // 50 MB parallel threshold even though the on-disk file is small.
+        assert_eq!(
+            estimate_decompressed_size(13 * 1024 * 1024, Some("gz")),
+            52 * 1024 * 1024
+        );
+        assert_eq!(
+            estimate_decompressed_size(13 * 1024 * 1024, Some("bz2")),
+            52 * 1024 * 1024
+        );
+        // Uncompressed FASTQ is taken at face value.
+        assert_eq!(
+            estimate_decompressed_size(13 * 1024 * 1024, Some("fastq")),
+            13 * 1024 * 1024
+        );
+        assert_eq!(
+            estimate_decompressed_size(13 * 1024 * 1024, None),
+            13 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn estimate_decompressed_size_does_not_overflow_on_huge_files() {
+        assert_eq!(estimate_decompressed_size(u64::MAX, Some("gz")), u64::MAX);
+    }
 
     /// Regression test for issue #3, parallel path: large files (>50 MB) are
     /// processed by `process_file_parallel`, whose reader thread decodes the

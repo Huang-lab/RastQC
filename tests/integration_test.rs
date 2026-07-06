@@ -1,6 +1,8 @@
 use std::fs;
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 fn binary_path() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_BIN_EXE_rastqc"));
@@ -512,4 +514,41 @@ fn test_summary_tsv_format() {
     assert!(seq_count > 0);
 
     cleanup(&outdir);
+}
+
+/// `--serve` is a standalone "browse reports already on disk" mode
+/// (gui::serve_index lists existing *_fastqc.html files in outdir) and must
+/// work without any input files. Regression test: this used to unconditionally
+/// bail with "No input files specified" before ever reaching --serve.
+#[test]
+fn test_serve_without_input_files_starts_server() {
+    let outdir = test_dir().join("serve_no_files");
+    let _ = fs::create_dir_all(&outdir);
+    let port = 18_423u16;
+
+    let mut child = Command::new(binary_path())
+        .args(["--serve", "--port"])
+        .arg(port.to_string())
+        .arg("-o")
+        .arg(&outdir)
+        .spawn()
+        .expect("Failed to spawn rastqc --serve");
+
+    let mut connected = false;
+    for _ in 0..20 {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            connected = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    cleanup(&outdir);
+
+    assert!(
+        connected,
+        "rastqc --serve (no input files) never opened its port"
+    );
 }

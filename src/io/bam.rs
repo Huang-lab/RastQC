@@ -37,22 +37,41 @@ impl BamReader {
         Ok(BamReader::Sam { reader })
     }
 
+    /// Reads the next primary alignment record with a non-empty sequence,
+    /// transparently skipping secondary/supplementary/empty-SEQ records.
+    ///
+    /// `bam_record_to_sequence`/`sam_record_to_sequence` return `Ok(None)` for
+    /// records that should be skipped (not just at true end-of-stream), so a
+    /// single `read_record` call cannot distinguish "skip this record" from
+    /// "no more records" — this loops until a real record or EOF is found.
     pub fn next_sequence(&mut self) -> Result<Option<Sequence>> {
         match self {
             BamReader::Bam { reader } => {
                 let mut record = bam::Record::default();
-                match reader.read_record(&mut record) {
-                    Ok(0) => Ok(None),
-                    Ok(_) => bam_record_to_sequence(&record),
-                    Err(e) => Err(e.into()),
+                loop {
+                    match reader.read_record(&mut record) {
+                        Ok(0) => return Ok(None),
+                        Ok(_) => {
+                            if let Some(seq) = bam_record_to_sequence(&record)? {
+                                return Ok(Some(seq));
+                            }
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
             BamReader::Sam { reader } => {
                 let mut record = sam::Record::default();
-                match reader.read_record(&mut record) {
-                    Ok(0) => Ok(None),
-                    Ok(_) => sam_record_to_sequence(&record),
-                    Err(e) => Err(e.into()),
+                loop {
+                    match reader.read_record(&mut record) {
+                        Ok(0) => return Ok(None),
+                        Ok(_) => {
+                            if let Some(seq) = sam_record_to_sequence(&record)? {
+                                return Ok(Some(seq));
+                            }
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
         }
@@ -145,4 +164,63 @@ fn sam_record_to_sequence(record: &sam::Record) -> Result<Option<Sequence>> {
         quality,
         filtered: flags.is_qc_fail(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn write_temp_sam(name: &str, contents: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("rastqc_test_{}_{}.sam", std::process::id(), name));
+        let mut file = File::create(&path).unwrap();
+        file.write_all(contents.as_bytes()).unwrap();
+        path
+    }
+
+    /// Regression test: a secondary/supplementary alignment in the middle of
+    /// a SAM/BAM file must not be mistaken for end-of-stream. Before the fix,
+    /// `bam_record_to_sequence`/`sam_record_to_sequence` returning `Ok(None)`
+    /// to mean "skip this record" was indistinguishable from true EOF at the
+    /// `next_sequence` call site, silently truncating the read after the
+    /// first secondary alignment.
+    #[test]
+    fn skips_secondary_alignment_without_truncating_stream() {
+        let sam = "@HD\tVN:1.6\tSO:unsorted\n\
+                    @SQ\tSN:chr1\tLN:1000\n\
+                    read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n\
+                    read1\t256\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n\
+                    read2\t0\tchr1\t5\t60\t4M\t*\t0\t0\tGGGG\tIIII\n";
+        let path = write_temp_sam("skip_secondary", sam);
+        let mut reader = BamReader::open_sam(&path).unwrap();
+
+        let mut names = Vec::new();
+        while let Some(seq) = reader.next_sequence().unwrap() {
+            names.push(seq.header);
+        }
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(names, vec!["@read1".to_string(), "@read2".to_string()]);
+    }
+
+    /// Same truncation hazard, but for a record with an empty `SEQ` (`*`)
+    /// in the middle of the file rather than a secondary alignment flag.
+    #[test]
+    fn skips_empty_sequence_record_without_truncating_stream() {
+        let sam = "@HD\tVN:1.6\tSO:unsorted\n\
+                    @SQ\tSN:chr1\tLN:1000\n\
+                    read1\t4\tchr1\t0\t0\t*\t*\t0\t0\t*\t*\n\
+                    read2\t0\tchr1\t5\t60\t4M\t*\t0\t0\tGGGG\tIIII\n";
+        let path = write_temp_sam("skip_empty_seq", sam);
+        let mut reader = BamReader::open_sam(&path).unwrap();
+
+        let mut names = Vec::new();
+        while let Some(seq) = reader.next_sequence().unwrap() {
+            names.push(seq.header);
+        }
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(names, vec!["@read2".to_string()]);
+    }
 }

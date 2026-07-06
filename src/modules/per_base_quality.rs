@@ -409,3 +409,43 @@ impl QCModule for PerBaseQuality {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Phred+33: '#' = Q2, 'I' = Q40.
+    fn sample_counts() -> QualityCount {
+        let mut qc = QualityCount::new();
+        for _ in 0..3 {
+            qc.add(b'#');
+        }
+        for _ in 0..2 {
+            qc.add(b'I');
+        }
+        qc
+    }
+
+    #[test]
+    fn mean_matches_hand_computed_value() {
+        let qc = sample_counts();
+        // (2*3 + 40*2) / 5 = 17.2
+        assert!((qc.mean(33) - 17.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn percentile_matches_hand_computed_value() {
+        let qc = sample_counts();
+        // median (p50): target = ceil(5*0.5) = 3 -> falls within the Q2 bucket
+        assert_eq!(qc.percentile(0.5, 33), 2.0);
+        // p90: target = ceil(5*0.9) = 5 -> falls within the Q40 bucket
+        assert_eq!(qc.percentile(0.9, 33), 40.0);
+    }
+
+    #[test]
+    fn empty_counts_return_zero_not_panic() {
+        let qc = QualityCount::new();
+        assert_eq!(qc.mean(33), 0.0);
+        assert_eq!(qc.percentile(0.5, 33), 0.0);
+    }
+}
