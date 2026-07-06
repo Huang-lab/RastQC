@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 use tiny_http::{Header, Response, Server, StatusCode};
 
@@ -20,9 +20,13 @@ pub fn start_server(outdir: &Path, port: u16) -> Result<()> {
         eprintln!("Open {} in your browser", url);
     }
 
+    // Fail loudly rather than silently falling back to a non-canonical
+    // outdir: serve_file() compares each request's canonicalized path
+    // against this one with starts_with(), which would never match a
+    // relative/raw path and would 404 every legitimate file instead.
     let outdir = outdir
         .canonicalize()
-        .unwrap_or_else(|_| outdir.to_path_buf());
+        .with_context(|| format!("Cannot resolve output directory: {}", outdir.display()))?;
 
     for request in server.incoming_requests() {
         let raw_path = request.url().to_string();
@@ -31,17 +35,12 @@ pub fn start_server(outdir: &Path, port: u16) -> Result<()> {
 
         let response = match url_path.as_str() {
             "/" => serve_index(&outdir),
-            _ => {
-                // Serve static files from outdir
-                let file_path = url_path.trim_start_matches('/');
-                if file_path.contains("..") {
-                    Response::from_string("Forbidden")
-                        .with_status_code(StatusCode(403))
-                        .with_header(content_type("text/plain"))
-                } else {
-                    serve_file(&outdir, file_path)
-                }
-            }
+            // serve_file's canonicalize()+starts_with(outdir) check is the
+            // authoritative traversal guard (it also catches symlink-based
+            // escapes a substring check can't); no separate ".." pre-check
+            // here, since one previously rejected legitimate filenames that
+            // merely contain ".." as a substring without traversing.
+            _ => serve_file(&outdir, url_path.trim_start_matches('/')),
         };
 
         let _ = request.respond(response);

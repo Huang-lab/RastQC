@@ -181,7 +181,11 @@ impl FastqReader {
             sequence
         };
 
-        if sequence.len() != quality.len() {
+        // SOLiD colorspace quality lines carry one score per color call, not
+        // per output base — the decoded sequence (primer base + N decoded
+        // bases) is always exactly one longer than its N-length quality
+        // line by design, not a malformed record.
+        if self.colorspace_detected != Some(true) && sequence.len() != quality.len() {
             bail!(
                 "Malformed FASTQ record '{}': sequence length ({}) does not match quality length ({})",
                 header,
@@ -216,6 +220,19 @@ mod tests {
         let mut r = reader_for("@read1\nACGT\n+\nIIII\n");
         let seq = r.next_sequence().unwrap().unwrap();
         assert_eq!(seq.sequence, b"ACGT");
+        assert_eq!(seq.quality, b"IIII");
+    }
+
+    #[test]
+    fn colorspace_record_with_one_shorter_quality_is_accepted() {
+        // SOLiD colorspace: sequence is primer base + N color digits, and
+        // decode_colorspace preserves that length (primer + N decoded
+        // bases). The quality line carries one score per color call, so a
+        // legitimate colorspace record's quality is always exactly one
+        // shorter than its decoded sequence — not a malformed record.
+        let mut r = reader_for("@read1\nA0000\n+\nIIII\n");
+        let seq = r.next_sequence().unwrap().unwrap();
+        assert_eq!(seq.sequence, b"AAAAA");
         assert_eq!(seq.quality, b"IIII");
     }
 

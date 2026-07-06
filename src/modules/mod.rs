@@ -108,7 +108,11 @@ pub trait QCModule: Send {
 pub fn merge_module_sets(target: &mut [Box<dyn QCModule>], source: &mut [Box<dyn QCModule>]) {
     assert_eq!(target.len(), source.len());
     for (t, s) in target.iter_mut().zip(source.iter_mut()) {
-        debug_assert!(
+        // A plain assert (not debug_assert): this crate's release profile
+        // doesn't set debug-assertions, so debug_assert! here would compile
+        // out entirely in the binary users actually run — silently losing
+        // every worker thread's data but one is worse than a hard failure.
+        assert!(
             t.supports_merge(),
             "{} does not implement merge_from; parallel chunk results would be silently dropped",
             t.name()
