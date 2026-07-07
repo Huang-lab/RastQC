@@ -80,11 +80,17 @@ pub trait QCModule: Send {
 
     /// Merge another module instance's accumulated state into this one.
     /// Called during intra-file parallel processing to combine chunk results.
-    /// Default: no-op (modules that don't implement merge fall back to sequential).
+    /// Default: no-op. A module relying on this default silently drops
+    /// `_other`'s accumulated data rather than falling back to sequential
+    /// processing — see `supports_merge`, which `merge_module_sets` uses to
+    /// catch this at merge time.
     fn merge_from(&mut self, _other: &mut dyn QCModule) {}
 
-    /// Whether this module supports merging parallel chunk results.
-    #[allow(dead_code)]
+    /// Whether this module implements a real `merge_from`. Every module
+    /// enabled in the parallel path must override this to `true`;
+    /// `merge_module_sets` asserts on it so a future module that forgets to
+    /// implement `merge_from` fails loudly instead of silently losing every
+    /// worker thread's data but its own.
     fn supports_merge(&self) -> bool {
         false
     }
@@ -102,6 +108,15 @@ pub trait QCModule: Send {
 pub fn merge_module_sets(target: &mut [Box<dyn QCModule>], source: &mut [Box<dyn QCModule>]) {
     assert_eq!(target.len(), source.len());
     for (t, s) in target.iter_mut().zip(source.iter_mut()) {
+        // A plain assert (not debug_assert): this crate's release profile
+        // doesn't set debug-assertions, so debug_assert! here would compile
+        // out entirely in the binary users actually run — silently losing
+        // every worker thread's data but one is worse than a hard failure.
+        assert!(
+            t.supports_merge(),
+            "{} does not implement merge_from; parallel chunk results would be silently dropped",
+            t.name()
+        );
         t.merge_from(s.as_mut());
     }
 }

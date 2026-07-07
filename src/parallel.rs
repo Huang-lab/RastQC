@@ -146,11 +146,44 @@ pub fn process_file_parallel(
     Ok((final_modules, total_count))
 }
 
+/// Conservative estimate of gzip/bzip2 compression ratio for FASTQ base-call
+/// data. Real ratios vary (~2x-10x+) with read complexity and codec; this is
+/// a deliberately modest multiplier so files that don't compress as well
+/// still cross the parallel threshold at a sane on-disk size.
+const ASSUMED_COMPRESSION_RATIO: u64 = 4;
+
+/// Estimate decompressed size from on-disk size and a lowercased filename.
+///
+/// FASTQ compresses well, so gating parallelism on the compressed on-disk
+/// size keeps the common case — a `.fastq.gz` well under 50 MB on disk but
+/// hundreds of MB decompressed — on the slower serial path, losing most of
+/// the benefit parallel processing is meant to provide for exactly this
+/// input type. Multi-member gzip (bgzip/pigz) streams make the gzip ISIZE
+/// trailer unreliable as an exact size, so this uses a conservative
+/// fixed-ratio estimate instead of decoding.
+///
+/// `lowercase_name` must already be lowercased by the caller, matching the
+/// convention used for compression-format detection elsewhere (e.g.
+/// `FastqReader::open`), so `sample.FASTQ.GZ` is still recognized.
+fn estimate_decompressed_size(on_disk_size: u64, lowercase_name: &str) -> u64 {
+    if lowercase_name.ends_with(".gz") || lowercase_name.ends_with(".bz2") {
+        on_disk_size.saturating_mul(ASSUMED_COMPRESSION_RATIO)
+    } else {
+        on_disk_size
+    }
+}
+
 /// Check if a file is large enough to benefit from parallel processing.
 pub fn should_use_parallel(path: &Path) -> bool {
-    path.metadata()
-        .map(|m| m.len() > 50 * 1024 * 1024) // > 50 MB
-        .unwrap_or(false)
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    estimate_decompressed_size(metadata.len(), &name) > 50 * 1024 * 1024
 }
 
 #[cfg(test)]
@@ -158,6 +191,53 @@ mod tests {
     use super::*;
     use crate::config::FastQCConfig;
     use std::io::Write;
+
+    #[test]
+    fn estimate_decompressed_size_scales_compressed_extensions() {
+        // A 13 MB .fastq.gz is estimated at 52 MB decompressed, crossing the
+        // 50 MB parallel threshold even though the on-disk file is small.
+        assert_eq!(
+            estimate_decompressed_size(13 * 1024 * 1024, "sample.fastq.gz"),
+            52 * 1024 * 1024
+        );
+        assert_eq!(
+            estimate_decompressed_size(13 * 1024 * 1024, "sample.fastq.bz2"),
+            52 * 1024 * 1024
+        );
+        // Uncompressed FASTQ is taken at face value.
+        assert_eq!(
+            estimate_decompressed_size(13 * 1024 * 1024, "sample.fastq"),
+            13 * 1024 * 1024
+        );
+        assert_eq!(
+            estimate_decompressed_size(13 * 1024 * 1024, ""),
+            13 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn estimate_decompressed_size_requires_caller_to_lowercase() {
+        // should_use_parallel lowercases the filename before calling this,
+        // matching FastqReader::open's convention, so a real ".GZ"/".Gz"
+        // file is still recognized as compressed (case handled by the
+        // caller, not here — this documents/locks in that division of work).
+        assert_eq!(
+            estimate_decompressed_size(13 * 1024 * 1024, "sample.fastq.gz"),
+            52 * 1024 * 1024
+        );
+        assert_eq!(
+            estimate_decompressed_size(13 * 1024 * 1024, "sample.fastq.GZ"),
+            13 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn estimate_decompressed_size_does_not_overflow_on_huge_files() {
+        assert_eq!(
+            estimate_decompressed_size(u64::MAX, "sample.fastq.gz"),
+            u64::MAX
+        );
+    }
 
     /// Regression test for issue #3, parallel path: large files (>50 MB) are
     /// processed by `process_file_parallel`, whose reader thread decodes the
@@ -189,6 +269,23 @@ mod tests {
         assert_eq!(
             count, 100,
             "parallel path must read all 100 records across both gzip members, got {count}"
+        );
+    }
+
+    #[test]
+    fn should_use_parallel_recognizes_uppercase_gz_extension() {
+        let dir = std::env::temp_dir().join(format!("rastqc_case_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 13 MB on disk, named with an uppercase extension.
+        let path = dir.join("sample.fastq.GZ");
+        std::fs::write(&path, vec![0u8; 13 * 1024 * 1024]).unwrap();
+
+        let result = should_use_parallel(&path);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            result,
+            "a 13 MB .GZ file should be estimated at ~52 MB decompressed and cross the parallel threshold"
         );
     }
 }

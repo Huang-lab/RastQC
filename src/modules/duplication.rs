@@ -362,3 +362,42 @@ impl QCModule for DuplicationLevel {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_corrected_count_returns_observations_when_all_sequences_tracked() {
+        // count_at_limit == total_count: every sequence was observed, so the
+        // raw count needs no binomial correction.
+        assert_eq!(DuplicationLevel::get_corrected_count(10, 10, 1, 7), 7.0);
+    }
+
+    #[test]
+    fn get_corrected_count_returns_observations_when_untracked_pool_too_small() {
+        // total_count - num_observations (4) < count_at_limit (5): FastQC
+        // bails out to the raw count rather than attempting correction.
+        assert_eq!(DuplicationLevel::get_corrected_count(5, 10, 1, 6), 6.0);
+    }
+
+    #[test]
+    fn get_corrected_count_applies_binomial_correction() {
+        // Hand-computable case: the per-step survival probabilities telescope
+        // to exactly 9/10 * 8/9 * 7/8 * 6/7 * 5/6 = 5/10 = 0.5, so p_seeing =
+        // 0.5 and the corrected count doubles the raw observation count.
+        let corrected = DuplicationLevel::get_corrected_count(5, 10, 1, 5);
+        assert!((corrected - 10.0).abs() < 1e-9, "got {corrected}");
+    }
+
+    #[test]
+    fn dup_slot_matches_fastqc_binning() {
+        assert_eq!(DuplicationLevel::dup_slot(1), 0);
+        assert_eq!(DuplicationLevel::dup_slot(9), 8);
+        assert_eq!(DuplicationLevel::dup_slot(10), 9);
+        assert_eq!(DuplicationLevel::dup_slot(11), 9);
+        assert_eq!(DuplicationLevel::dup_slot(51), 10);
+        assert_eq!(DuplicationLevel::dup_slot(10_001), 15);
+        assert_eq!(DuplicationLevel::dup_slot(0), 15);
+    }
+}

@@ -155,7 +155,20 @@ fn run() -> Result<ExitCode> {
         cli.files.push(PathBuf::from("-"));
     }
 
+    let outdir = cli.outdir.clone().unwrap_or_else(|| PathBuf::from("."));
+    if !outdir.exists() {
+        std::fs::create_dir_all(&outdir)?;
+    }
+
     if cli.files.is_empty() {
+        // `--serve` is also a standalone "browse reports already on disk"
+        // mode (see gui::serve_index, which lists existing *_fastqc.html
+        // files in outdir) — it must not require re-running QC on input
+        // files just to view them.
+        if cli.serve {
+            gui::start_server(&outdir, cli.port)?;
+            return Ok(ExitCode::SUCCESS);
+        }
         anyhow::bail!(
             "No input files specified. Pass file paths or use --stdin to read from standard input."
         );
@@ -188,11 +201,6 @@ fn run() -> Result<ExitCode> {
         .num_threads(cli.threads)
         .build_global()
         .ok();
-
-    let outdir = cli.outdir.clone().unwrap_or_else(|| PathBuf::from("."));
-    if !outdir.exists() {
-        std::fs::create_dir_all(&outdir)?;
-    }
 
     let total_start = Instant::now();
     let total_files = cli.files.len();
@@ -340,7 +348,11 @@ fn process_file(
     let filename = if is_stdin {
         "stdin.fastq".to_string()
     } else {
-        file.file_name().unwrap().to_string_lossy().to_string()
+        file.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .ok_or_else(|| {
+                anyhow::anyhow!("Invalid input path (no file name): {}", file.display())
+            })?
     };
     let stem = filename
         .trim_end_matches(".gz")

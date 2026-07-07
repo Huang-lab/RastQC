@@ -181,11 +181,65 @@ impl FastqReader {
             sequence
         };
 
+        // SOLiD colorspace quality lines carry one score per color call, not
+        // per output base — the decoded sequence (primer base + N decoded
+        // bases) is always exactly one longer than its N-length quality
+        // line by design, not a malformed record.
+        if self.colorspace_detected != Some(true) && sequence.len() != quality.len() {
+            bail!(
+                "Malformed FASTQ record '{}': sequence length ({}) does not match quality length ({})",
+                header,
+                sequence.len(),
+                quality.len()
+            );
+        }
+
         Ok(Some(Sequence {
             header,
             sequence,
             quality,
             filtered,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn reader_for(data: &str) -> FastqReader {
+        FastqReader {
+            reader: Box::new(BufReader::new(Cursor::new(data.as_bytes().to_vec()))),
+            colorspace_detected: None,
+        }
+    }
+
+    #[test]
+    fn well_formed_record_parses() {
+        let mut r = reader_for("@read1\nACGT\n+\nIIII\n");
+        let seq = r.next_sequence().unwrap().unwrap();
+        assert_eq!(seq.sequence, b"ACGT");
+        assert_eq!(seq.quality, b"IIII");
+    }
+
+    #[test]
+    fn colorspace_record_with_one_shorter_quality_is_accepted() {
+        // SOLiD colorspace: sequence is primer base + N color digits, and
+        // decode_colorspace preserves that length (primer + N decoded
+        // bases). The quality line carries one score per color call, so a
+        // legitimate colorspace record's quality is always exactly one
+        // shorter than its decoded sequence — not a malformed record.
+        let mut r = reader_for("@read1\nA0000\n+\nIIII\n");
+        let seq = r.next_sequence().unwrap().unwrap();
+        assert_eq!(seq.sequence, b"AAAAA");
+        assert_eq!(seq.quality, b"IIII");
+    }
+
+    #[test]
+    fn mismatched_sequence_and_quality_length_is_rejected() {
+        let mut r = reader_for("@read1\nACGT\n+\nIII\n");
+        let err = r.next_sequence().unwrap_err();
+        assert!(err.to_string().contains("does not match"));
     }
 }

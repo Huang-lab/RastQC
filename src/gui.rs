@@ -1,11 +1,13 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 use tiny_http::{Header, Response, Server, StatusCode};
 
 /// Start a local web server that serves RastQC reports and provides
 /// a GUI for viewing results and selecting files for analysis.
 pub fn start_server(outdir: &Path, port: u16) -> Result<()> {
-    let addr = format!("0.0.0.0:{}", port);
+    // Bind to loopback only: this is an unauthenticated file server, so it
+    // must not be reachable from the network by default.
+    let addr = format!("127.0.0.1:{}", port);
     let server = Server::http(&addr)
         .map_err(|e| anyhow::anyhow!("Failed to start server on {}: {}", addr, e))?;
 
@@ -18,32 +20,58 @@ pub fn start_server(outdir: &Path, port: u16) -> Result<()> {
         eprintln!("Open {} in your browser", url);
     }
 
-    let outdir = outdir.to_path_buf();
+    // Fail loudly rather than silently falling back to a non-canonical
+    // outdir: serve_file() compares each request's canonicalized path
+    // against this one with starts_with(), which would never match a
+    // relative/raw path and would 404 every legitimate file instead.
+    let outdir = outdir
+        .canonicalize()
+        .with_context(|| format!("Cannot resolve output directory: {}", outdir.display()))?;
 
     for request in server.incoming_requests() {
-        let url_path = request.url().to_string();
-        let url_path = url_path.split('?').next().unwrap_or("/");
+        let raw_path = request.url().to_string();
+        let raw_path = raw_path.split('?').next().unwrap_or("/");
+        let url_path = percent_decode(raw_path);
 
-        let response = match url_path {
+        let response = match url_path.as_str() {
             "/" => serve_index(&outdir),
-            _ => {
-                // Serve static files from outdir
-                let file_path = url_path.trim_start_matches('/');
-                // Prevent directory traversal
-                if file_path.contains("..") {
-                    Response::from_string("Forbidden")
-                        .with_status_code(StatusCode(403))
-                        .with_header(content_type("text/plain"))
-                } else {
-                    serve_file(&outdir, file_path)
-                }
-            }
+            // serve_file's canonicalize()+starts_with(outdir) check is the
+            // authoritative traversal guard (it also catches symlink-based
+            // escapes a substring check can't); no separate ".." pre-check
+            // here, since one previously rejected legitimate filenames that
+            // merely contain ".." as a substring without traversing.
+            _ => serve_file(&outdir, url_path.trim_start_matches('/')),
         };
 
         let _ = request.respond(response);
     }
 
     Ok(())
+}
+
+/// Decodes percent-encoded octets (`%2e` -> `.`) in a URL path.
+///
+/// `tiny_http` does not decode the request URL itself, so without this,
+/// traversal segments like `%2e%2e` bypass the literal `".."` substring
+/// check performed on the raw path before it ever gets here.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    out.push(byte);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn serve_index(outdir: &Path) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -116,6 +144,18 @@ fn serve_index(outdir: &Path) -> Response<std::io::Cursor<Vec<u8>>> {
 fn serve_file(outdir: &Path, relative: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let path = outdir.join(relative);
 
+    // Defense in depth beyond the ".." substring check: canonicalize and
+    // verify the resolved path is still inside outdir (guards against
+    // symlinks and any other traversal the substring check might miss).
+    match path.canonicalize() {
+        Ok(resolved) if resolved.starts_with(outdir) => {}
+        _ => {
+            return Response::from_string("Not Found")
+                .with_status_code(StatusCode(404))
+                .with_header(content_type("text/plain"));
+        }
+    }
+
     match std::fs::read(&path) {
         Ok(data) => {
             let ct = match path.extension().and_then(|e| e.to_str()) {
@@ -180,3 +220,40 @@ body {
 .empty { color: #888; font-style: italic; padding: 20px 0; }
 .footer { text-align: center; padding: 20px; color: #888; font-size: 12px; }
 "##;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percent_decode_handles_encoded_traversal_and_plain_text() {
+        assert_eq!(
+            percent_decode("%2e%2e/%2e%2e/etc/passwd"),
+            "../../etc/passwd"
+        );
+        assert_eq!(percent_decode("summary.html"), "summary.html");
+        assert_eq!(percent_decode("a%20b"), "a b");
+        // Trailing malformed escape should pass through unchanged.
+        assert_eq!(percent_decode("abc%"), "abc%");
+        assert_eq!(percent_decode("abc%zz"), "abc%zz");
+    }
+
+    #[test]
+    fn serve_file_rejects_traversal_outside_outdir() {
+        let dir = std::env::temp_dir().join(format!("rastqc_gui_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("summary.html"), "<p>ok</p>").unwrap();
+        let outdir = dir.canonicalize().unwrap();
+
+        // A legitimate file inside outdir is served.
+        let ok = serve_file(&outdir, "summary.html");
+        assert_eq!(ok.status_code().0, 200);
+
+        // Percent-decoded traversal (post-decode, still containing "..")
+        // resolves outside outdir and must be rejected, not read.
+        let escaped = serve_file(&outdir, "../etc/passwd");
+        assert_eq!(escaped.status_code().0, 404);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
