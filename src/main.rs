@@ -579,8 +579,43 @@ fn print_final_tally(summaries: &[FileSummary], total_files: usize, elapsed: f64
 
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("...{}", &s[s.len() - (max_len - 3)..])
+        return s.to_string();
+    }
+    let target = s.len() - (max_len - 3);
+    // Byte-slicing at `target` can land mid-codepoint for multi-byte UTF-8
+    // filenames; walk forward to the next char boundary.
+    let start = (target..=s.len())
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(s.len());
+    format!("...{}", &s[start..])
+}
+
+#[cfg(test)]
+mod truncate_str_tests {
+    use super::truncate_str;
+
+    #[test]
+    fn short_string_is_unchanged() {
+        assert_eq!(truncate_str("sample.fastq.gz", 35), "sample.fastq.gz");
+    }
+
+    #[test]
+    fn long_ascii_string_is_truncated_with_ellipsis() {
+        let s = "a_very_long_sample_filename_R1_001.fastq.gz";
+        let out = truncate_str(s, 20);
+        assert!(out.starts_with("..."));
+        assert!(out.len() <= 20);
+    }
+
+    #[test]
+    fn long_multibyte_utf8_filename_does_not_panic() {
+        // Non-ASCII (3-byte-per-char CJK) filename longer than max_len must
+        // not panic by slicing mid-codepoint.
+        let s = "样样样样样样样样样样样样样样样样样样样样.fastq.gz";
+        let out = truncate_str(s, 35);
+        assert!(out.starts_with("..."));
+        // The result must itself be valid UTF-8 (guaranteed by the type
+        // system once slicing doesn't panic) and non-empty.
+        assert!(!out.is_empty());
     }
 }

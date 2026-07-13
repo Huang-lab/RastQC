@@ -44,7 +44,7 @@ impl FastaReader {
         if self.header.is_none() {
             loop {
                 line.clear();
-                if self.reader.read_line(&mut line)? == 0 {
+                if super::read_line_bounded(&mut *self.reader, &mut line)? == 0 {
                     return Ok(None);
                 }
                 let trimmed = line.trim();

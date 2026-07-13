@@ -102,10 +102,14 @@ fn bam_record_to_sequence(record: &bam::Record) -> Result<Option<Sequence>> {
         });
     }
 
-    // Extract quality scores - stored as raw phred values in BAM
+    // Extract quality scores - stored as raw phred values in BAM.
+    // noodles doesn't validate that QUAL bytes stay within the legal
+    // 0-93 Phred range, so a malformed/corrupted BAM can carry a byte
+    // >= 223 here; saturate instead of panicking (debug) or silently
+    // wrapping to a bogus low value (release).
     let qual_data = record.quality_scores();
     let qual_bytes: &[u8] = qual_data.as_ref();
-    let quality: Vec<u8> = qual_bytes.iter().map(|&q| q + 33).collect();
+    let quality: Vec<u8> = qual_bytes.iter().map(|&q| q.saturating_add(33)).collect();
 
     if sequence.is_empty() {
         return Ok(None);
@@ -149,7 +153,7 @@ fn sam_record_to_sequence(record: &sam::Record) -> Result<Option<Sequence>> {
     let mut quality = Vec::with_capacity(seq_len);
     for score in qual_scores.iter() {
         match score {
-            Ok(q) => quality.push(q + 33),
+            Ok(q) => quality.push(q.saturating_add(33)),
             Err(_) => quality.push(33),
         }
     }

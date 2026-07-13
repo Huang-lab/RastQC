@@ -94,7 +94,7 @@ impl FastqReader {
         // Read header line (starts with @)
         loop {
             header_line.clear();
-            match self.reader.read_line(&mut header_line) {
+            match super::read_line_bounded(&mut *self.reader, &mut header_line) {
                 Ok(0) => return Ok(None),
                 Ok(_) => {
                     let trimmed = header_line.trim();
@@ -123,7 +123,7 @@ impl FastqReader {
 
         // Read sequence line
         let mut sequence_line = String::with_capacity(512);
-        let res = self.reader.read_line(&mut sequence_line);
+        let res = super::read_line_bounded(&mut *self.reader, &mut sequence_line);
         if let Err(e) = res {
             if e.kind() == io::ErrorKind::UnexpectedEof
                 || e.to_string().contains("unexpected end of file")
@@ -139,7 +139,7 @@ impl FastqReader {
 
         // Read separator line (+)
         let mut sep_line = String::with_capacity(16);
-        let res = self.reader.read_line(&mut sep_line);
+        let res = super::read_line_bounded(&mut *self.reader, &mut sep_line);
         if let Err(e) = res {
             if e.kind() == io::ErrorKind::UnexpectedEof
                 || e.to_string().contains("unexpected end of file")
@@ -157,7 +157,7 @@ impl FastqReader {
 
         // Read quality line
         let mut quality_line = String::with_capacity(512);
-        let res = self.reader.read_line(&mut quality_line);
+        let res = super::read_line_bounded(&mut *self.reader, &mut quality_line);
         if let Err(e) = res {
             if e.kind() == io::ErrorKind::UnexpectedEof
                 || e.to_string().contains("unexpected end of file")
