@@ -32,7 +32,6 @@ pub struct FastQCConfig {
     pub contaminants: Vec<Contaminant>,
     pub limits: HashMap<String, ModuleLimits>,
     pub kmer_size: usize,
-    #[allow(dead_code)]
     pub nofilter: bool,
     pub dup_length: usize,
 }

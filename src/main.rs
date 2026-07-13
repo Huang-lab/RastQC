@@ -332,6 +332,9 @@ fn process_file(
             let mut count: u64 = 0;
             while let Some(seq) = reader.next_sequence()? {
                 for module in &mut qc_modules {
+                    if seq.filtered && !config.nofilter && !module.wants_filtered_reads() {
+                        continue;
+                    }
                     module.process_sequence(&seq);
                 }
                 count += 1;

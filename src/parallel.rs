@@ -99,6 +99,10 @@ pub fn process_file_parallel(
             while let Ok(batch) = rx.recv() {
                 for seq in &batch {
                     for module in modules.iter_mut() {
+                        if seq.filtered && !worker_config.nofilter && !module.wants_filtered_reads()
+                        {
+                            continue;
+                        }
                         module.process_sequence(seq);
                     }
                     count += 1;

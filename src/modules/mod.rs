@@ -58,6 +58,16 @@ pub trait QCModule: Send {
     /// Process one sequence
     fn process_sequence(&mut self, seq: &Sequence);
 
+    /// Whether this module must still see filter-failed reads (via
+    /// `process_sequence`) even when the run is excluding them from
+    /// analysis. Only `BasicStats` needs this — it reports how many reads
+    /// were filtered out (`Sequences flagged as poor quality`), which
+    /// requires seeing every read; every other module gets skipped for a
+    /// filter-failed read unless `--nofilter` is set. See `--nofilter`.
+    fn wants_filtered_reads(&self) -> bool {
+        false
+    }
+
     /// Calculate final results after all sequences processed
     fn calculate_results(&mut self, config: &FastQCConfig);
 
@@ -296,7 +306,7 @@ impl ModuleFactory {
     pub fn create_modules(config: &FastQCConfig) -> Vec<Box<dyn QCModule>> {
         let mut modules: Vec<Box<dyn QCModule>> = Vec::new();
 
-        modules.push(Box::new(basic_stats::BasicStats::new()));
+        modules.push(Box::new(basic_stats::BasicStats::new(config.nofilter)));
 
         if !config.is_ignored("quality_base") {
             modules.push(Box::new(per_base_quality::PerBaseQuality::new()));
