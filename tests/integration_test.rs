@@ -573,7 +573,7 @@ fn test_nofilter_flag_controls_whether_filtered_reads_are_counted() {
     let default_outdir = outdir.join("default");
     let _ = fs::create_dir_all(&default_outdir);
     let output = Command::new(binary_path())
-        .args(["--extract", "--quiet", "-o"])
+        .args(["--extract", "--summary", "--quiet", "-o"])
         .arg(&default_outdir)
         .arg(&input)
         .output()
@@ -587,6 +587,18 @@ fn test_nofilter_flag_controls_whether_filtered_reads_are_counted() {
     assert!(
         data.contains("Sequences flagged as poor quality\t1"),
         "default run should still report the filtered count: {data}"
+    );
+
+    // The TSV summary's "Total Sequences" column must agree with
+    // fastqc_data.txt's — both derive from the same post-filter count, so a
+    // run with filtered reads shouldn't report two different totals
+    // depending on which output file you look at.
+    let tsv = fs::read_to_string(default_outdir.join("summary.tsv")).unwrap();
+    let data_row = tsv.lines().nth(1).expect("summary.tsv needs a data row");
+    let tsv_total: u64 = data_row.split('\t').next_back().unwrap().parse().unwrap();
+    assert_eq!(
+        tsv_total, 1,
+        "summary.tsv Total Sequences must match fastqc_data.txt's post-filter count"
     );
 
     // --nofilter: both reads are included.

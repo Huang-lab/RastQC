@@ -43,7 +43,6 @@ impl BasicStats {
         }
     }
 
-    #[allow(dead_code)]
     pub fn total_sequences(&self) -> u64 {
         self.total_sequences
     }

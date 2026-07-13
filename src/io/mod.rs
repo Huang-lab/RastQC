@@ -22,34 +22,42 @@ const MAX_LINE_LEN: usize = 256 * 1024 * 1024;
 
 /// Like `BufRead::read_line`, but errors instead of growing `buf` without
 /// bound if no newline is found within `MAX_LINE_LEN` bytes.
+///
+/// `scratch` is a caller-owned byte buffer reused across calls (cleared each
+/// call): without it, every call would allocate a fresh `Vec` from scratch,
+/// throwing away the capacity-reuse the callers already rely on for their
+/// per-record `String` buffers (one call per line, so this matters — 4x per
+/// FASTQ record, 1x per FASTA line).
 pub(crate) fn read_line_bounded<R: BufRead + ?Sized>(
     reader: &mut R,
     buf: &mut String,
+    scratch: &mut Vec<u8>,
 ) -> io::Result<usize> {
-    read_line_bounded_with_limit(reader, buf, MAX_LINE_LEN)
+    read_line_bounded_with_limit(reader, buf, scratch, MAX_LINE_LEN)
 }
 
 fn read_line_bounded_with_limit<R: BufRead + ?Sized>(
     reader: &mut R,
     buf: &mut String,
+    scratch: &mut Vec<u8>,
     max_len: usize,
 ) -> io::Result<usize> {
-    let mut raw = Vec::new();
+    scratch.clear();
     loop {
         let (found_newline, consumed) = {
             let available = reader.fill_buf()?;
             if available.is_empty() {
                 (true, 0)
             } else if let Some(pos) = available.iter().position(|&b| b == b'\n') {
-                raw.extend_from_slice(&available[..=pos]);
+                scratch.extend_from_slice(&available[..=pos]);
                 (true, pos + 1)
             } else {
-                raw.extend_from_slice(available);
+                scratch.extend_from_slice(available);
                 (false, available.len())
             }
         };
         reader.consume(consumed);
-        if raw.len() > max_len {
+        if scratch.len() > max_len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
@@ -62,9 +70,10 @@ fn read_line_bounded_with_limit<R: BufRead + ?Sized>(
             break;
         }
     }
-    let s = String::from_utf8(raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let s =
+        std::str::from_utf8(scratch).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let n = s.len();
-    buf.push_str(&s);
+    buf.push_str(s);
     Ok(n)
 }
 
@@ -77,7 +86,8 @@ mod read_line_bounded_tests {
     fn reads_normal_line_including_newline() {
         let mut reader = Cursor::new(b"hello\nworld\n".to_vec());
         let mut buf = String::new();
-        let n = read_line_bounded_with_limit(&mut reader, &mut buf, 1024).unwrap();
+        let mut scratch = Vec::new();
+        let n = read_line_bounded_with_limit(&mut reader, &mut buf, &mut scratch, 1024).unwrap();
         assert_eq!(buf, "hello\n");
         assert_eq!(n, 6);
     }
@@ -86,7 +96,8 @@ mod read_line_bounded_tests {
     fn reads_final_line_without_trailing_newline() {
         let mut reader = Cursor::new(b"hello".to_vec());
         let mut buf = String::new();
-        let n = read_line_bounded_with_limit(&mut reader, &mut buf, 1024).unwrap();
+        let mut scratch = Vec::new();
+        let n = read_line_bounded_with_limit(&mut reader, &mut buf, &mut scratch, 1024).unwrap();
         assert_eq!(buf, "hello");
         assert_eq!(n, 5);
     }
@@ -95,7 +106,8 @@ mod read_line_bounded_tests {
     fn returns_zero_at_eof() {
         let mut reader = Cursor::new(Vec::new());
         let mut buf = String::new();
-        let n = read_line_bounded_with_limit(&mut reader, &mut buf, 1024).unwrap();
+        let mut scratch = Vec::new();
+        let n = read_line_bounded_with_limit(&mut reader, &mut buf, &mut scratch, 1024).unwrap();
         assert_eq!(n, 0);
         assert_eq!(buf, "");
     }
@@ -109,7 +121,9 @@ mod read_line_bounded_tests {
         let data = vec![b'A'; 10_000];
         let mut reader = Cursor::new(data);
         let mut buf = String::new();
-        let err = read_line_bounded_with_limit(&mut reader, &mut buf, 100).unwrap_err();
+        let mut scratch = Vec::new();
+        let err =
+            read_line_bounded_with_limit(&mut reader, &mut buf, &mut scratch, 100).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("exceeds maximum length"));
     }
@@ -139,7 +153,8 @@ mod read_line_bounded_tests {
 
         let mut reader = OneByteAtATime(Cursor::new(b"hello world\n".to_vec()));
         let mut buf = String::new();
-        let n = read_line_bounded_with_limit(&mut reader, &mut buf, 1024).unwrap();
+        let mut scratch = Vec::new();
+        let n = read_line_bounded_with_limit(&mut reader, &mut buf, &mut scratch, 1024).unwrap();
         assert_eq!(buf, "hello world\n");
         assert_eq!(n, 12);
     }

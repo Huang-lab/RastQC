@@ -9,6 +9,9 @@ use std::path::Path;
 pub struct FastaReader {
     reader: Box<dyn BufRead>,
     header: Option<String>,
+    /// Reusable scratch buffer for `read_line_bounded`, shared across both
+    /// the header-scan and sequence-accumulation loops.
+    line_scratch: Vec<u8>,
 }
 
 impl FastaReader {
@@ -34,6 +37,7 @@ impl FastaReader {
         Ok(FastaReader {
             reader: Box::new(BufReader::new(reader)),
             header: None,
+            line_scratch: Vec::new(),
         })
     }
 
@@ -44,7 +48,9 @@ impl FastaReader {
         if self.header.is_none() {
             loop {
                 line.clear();
-                if super::read_line_bounded(&mut *self.reader, &mut line)? == 0 {
+                if super::read_line_bounded(&mut *self.reader, &mut line, &mut self.line_scratch)?
+                    == 0
+                {
                     return Ok(None);
                 }
                 let trimmed = line.trim();
@@ -60,7 +66,8 @@ impl FastaReader {
 
         loop {
             line.clear();
-            if self.reader.read_line(&mut line)? == 0 {
+            if super::read_line_bounded(&mut *self.reader, &mut line, &mut self.line_scratch)? == 0
+            {
                 // End of file
                 break;
             }

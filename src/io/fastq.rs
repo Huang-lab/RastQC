@@ -20,6 +20,9 @@ enum StreamKind {
 pub struct FastqReader {
     reader: Box<dyn BufRead>,
     colorspace_detected: Option<bool>,
+    /// Reusable scratch buffer for `read_line_bounded`, shared across all
+    /// four per-record line reads so its capacity survives across calls.
+    line_scratch: Vec<u8>,
 }
 
 impl FastqReader {
@@ -50,6 +53,7 @@ impl FastqReader {
         Ok(FastqReader {
             reader: Box::new(BufReader::with_capacity(1024 * 1024, reader)),
             colorspace_detected: None,
+            line_scratch: Vec::new(),
         })
     }
 
@@ -85,6 +89,7 @@ impl FastqReader {
         FastqReader {
             reader,
             colorspace_detected: None,
+            line_scratch: Vec::new(),
         }
     }
 
@@ -94,7 +99,11 @@ impl FastqReader {
         // Read header line (starts with @)
         loop {
             header_line.clear();
-            match super::read_line_bounded(&mut *self.reader, &mut header_line) {
+            match super::read_line_bounded(
+                &mut *self.reader,
+                &mut header_line,
+                &mut self.line_scratch,
+            ) {
                 Ok(0) => return Ok(None),
                 Ok(_) => {
                     let trimmed = header_line.trim();
@@ -123,7 +132,11 @@ impl FastqReader {
 
         // Read sequence line
         let mut sequence_line = String::with_capacity(512);
-        let res = super::read_line_bounded(&mut *self.reader, &mut sequence_line);
+        let res = super::read_line_bounded(
+            &mut *self.reader,
+            &mut sequence_line,
+            &mut self.line_scratch,
+        );
         if let Err(e) = res {
             if e.kind() == io::ErrorKind::UnexpectedEof
                 || e.to_string().contains("unexpected end of file")
@@ -139,7 +152,8 @@ impl FastqReader {
 
         // Read separator line (+)
         let mut sep_line = String::with_capacity(16);
-        let res = super::read_line_bounded(&mut *self.reader, &mut sep_line);
+        let res =
+            super::read_line_bounded(&mut *self.reader, &mut sep_line, &mut self.line_scratch);
         if let Err(e) = res {
             if e.kind() == io::ErrorKind::UnexpectedEof
                 || e.to_string().contains("unexpected end of file")
@@ -157,7 +171,8 @@ impl FastqReader {
 
         // Read quality line
         let mut quality_line = String::with_capacity(512);
-        let res = super::read_line_bounded(&mut *self.reader, &mut quality_line);
+        let res =
+            super::read_line_bounded(&mut *self.reader, &mut quality_line, &mut self.line_scratch);
         if let Err(e) = res {
             if e.kind() == io::ErrorKind::UnexpectedEof
                 || e.to_string().contains("unexpected end of file")
@@ -212,6 +227,7 @@ mod tests {
         FastqReader {
             reader: Box::new(BufReader::new(Cursor::new(data.as_bytes().to_vec()))),
             colorspace_detected: None,
+            line_scratch: Vec::new(),
         }
     }
 
