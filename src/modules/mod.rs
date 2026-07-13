@@ -131,6 +131,14 @@ pub fn merge_module_sets(target: &mut [Box<dyn QCModule>], source: &mut [Box<dyn
     }
 }
 
+/// Whether `process_sequence` should be called on `module` for `seq`, given
+/// this run's `--nofilter` setting. Shared by the sequential (`main.rs`) and
+/// parallel-worker (`parallel.rs`) processing loops so the filtering policy
+/// can't drift between the two.
+pub fn should_process(seq: &Sequence, nofilter: bool, module: &dyn QCModule) -> bool {
+    !seq.filtered || nofilter || module.wants_filtered_reads()
+}
+
 /// The `Total Sequences` value from the `BasicStats` module, if present.
 ///
 /// This is the post-filter count (excludes filter-failed reads unless
