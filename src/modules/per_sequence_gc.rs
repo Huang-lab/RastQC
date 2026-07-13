@@ -410,3 +410,177 @@ impl QCModule for PerSequenceGC {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_config() -> FastQCConfig {
+        FastQCConfig::new(None, None, None, 7, false, 50).unwrap()
+    }
+
+    fn seq(s: &[u8]) -> Sequence {
+        Sequence {
+            header: "@t".to_string(),
+            sequence: s.to_vec(),
+            quality: vec![b'I'; s.len()],
+            filtered: false,
+        }
+    }
+
+    #[test]
+    fn gc_model_conserves_mass_when_summed_across_gc_counts_per_bin() {
+        // GCModel's real conservation invariant is per OUTPUT bin, not per
+        // gc_count: bin `p` is claimed by exactly `claiming_counts[p]`
+        // distinct gc_counts, and each of those contributes weight
+        // `1/claiming_counts[p]` to it — so summed back across every
+        // gc_count that claims bin `p`, the total is exactly 1.0. (A
+        // single gc_count's own weights can sum to anything, since its
+        // window may span bins claimed by very different numbers of other
+        // gc_counts — see the boundary case this replaced.)
+        for read_length in [1, 4, 7, 36, 101, 150] {
+            let model = GCModel::new(read_length);
+            let mut bin_totals = [0.0_f64; 101];
+            for gc_count in 0..=read_length {
+                for &(p, w) in model.get_values(gc_count) {
+                    bin_totals[p] += w;
+                }
+            }
+            for (p, &total) in bin_totals.iter().enumerate() {
+                if total > 0.0 {
+                    assert!(
+                        (total - 1.0).abs() < 1e-9,
+                        "read_length={read_length} bin={p}: total weight {total}, expected 1.0"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gc_model_out_of_range_gc_count_returns_empty() {
+        let model = GCModel::new(10);
+        assert!(model.get_values(11).is_empty());
+        assert!(model.get_values(1000).is_empty());
+    }
+
+    #[test]
+    fn empty_sequence_is_ignored() {
+        let mut m = PerSequenceGC::new();
+        m.process_sequence(&seq(b""));
+        assert_eq!(m.total_count, 0);
+    }
+
+    #[test]
+    fn all_gc_sequences_peak_near_100_percent() {
+        let mut m = PerSequenceGC::new();
+        for _ in 0..50 {
+            m.process_sequence(&seq(b"GCGCGCGCGCGCGCGCGCGC"));
+        }
+        let config = default_config();
+        m.calculate_results(&config);
+
+        let (peak_idx, _) = m
+            .gc_distribution
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap();
+        assert!(
+            peak_idx >= 95,
+            "all-GC reads should peak near 100% GC, got {peak_idx}"
+        );
+    }
+
+    #[test]
+    fn all_at_sequences_peak_near_zero_percent() {
+        let mut m = PerSequenceGC::new();
+        for _ in 0..50 {
+            m.process_sequence(&seq(b"ATATATATATATATATATAT"));
+        }
+        let config = default_config();
+        m.calculate_results(&config);
+
+        let (peak_idx, _) = m
+            .gc_distribution
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap();
+        // The smoothing kernel can spread a boundary GC count's mass across
+        // a few adjacent low bins rather than landing exactly on bin 0.
+        assert!(
+            peak_idx <= 5,
+            "all-AT reads should peak near 0% GC, got {peak_idx}"
+        );
+    }
+
+    #[test]
+    fn deviation_percent_is_finite_and_non_negative() {
+        // A single narrow GC% spike deviates a lot from a fitted normal
+        // curve (that's a real, correct property of this metric — not
+        // something this test should assume passes/warns/fails). What must
+        // always hold is that the float-heavy deviation formula never
+        // produces NaN/Infinity/negative output.
+        let mut m = PerSequenceGC::new();
+        for _ in 0..200 {
+            m.process_sequence(&seq(b"ACGTACGTACGTACGTACGT")); // 50% GC, len 20
+        }
+        let config = default_config();
+        m.calculate_results(&config);
+        assert!(m.deviation_percent.is_finite());
+        assert!(m.deviation_percent >= 0.0);
+    }
+
+    #[test]
+    fn long_reads_are_truncated_to_nearest_bucket() {
+        // Matches FastQC: >1000bp truncates to the nearest lower multiple of
+        // 1000; >100bp (and <=1000bp) truncates to the nearest lower
+        // multiple of 100. This is observable via which GCModel key gets
+        // cached for a given input length.
+        let mut m = PerSequenceGC::new();
+        m.process_sequence(&seq(&vec![b'A'; 250])); // -> 200
+        assert!(m.gc_models.contains_key(&200));
+
+        let mut m2 = PerSequenceGC::new();
+        m2.process_sequence(&seq(&vec![b'A'; 1500])); // -> 1000
+        assert!(m2.gc_models.contains_key(&1000));
+    }
+
+    #[test]
+    fn merge_matches_processing_all_sequences_in_one_instance() {
+        let seqs: Vec<Sequence> = (0..100)
+            .map(|i| {
+                let bases = b"ACGT";
+                let s: Vec<u8> = (0..20).map(|j| bases[(i + j) % 4]).collect();
+                seq(&s)
+            })
+            .collect();
+
+        let mut combined = PerSequenceGC::new();
+        for s in &seqs {
+            combined.process_sequence(s);
+        }
+
+        let mut a = PerSequenceGC::new();
+        let mut b = PerSequenceGC::new();
+        for (i, s) in seqs.iter().enumerate() {
+            if i % 2 == 0 {
+                a.process_sequence(s);
+            } else {
+                b.process_sequence(s);
+            }
+        }
+        a.merge_from(&mut b);
+
+        assert_eq!(combined.total_count, a.total_count);
+        for i in 0..=100 {
+            assert!(
+                (combined.gc_distribution[i] - a.gc_distribution[i]).abs() < 1e-9,
+                "bin {i}: combined={} merged={}",
+                combined.gc_distribution[i],
+                a.gc_distribution[i]
+            );
+        }
+    }
+}

@@ -290,3 +290,135 @@ impl QCModule for KmerContent {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::FastQCConfig;
+
+    fn default_config() -> FastQCConfig {
+        FastQCConfig::new(None, None, None, 5, false, 50).unwrap()
+    }
+
+    fn seq(s: &[u8]) -> Sequence {
+        Sequence {
+            header: "@t".to_string(),
+            sequence: s.to_vec(),
+            quality: vec![b'I'; s.len()],
+            filtered: false,
+        }
+    }
+
+    #[test]
+    fn only_every_sampling_rate_th_sequence_is_sampled() {
+        let mut m = KmerContent::new(5);
+        // SAMPLING_RATE = 50: none of the first 49 sequences should be sampled.
+        for _ in 0..49 {
+            m.process_sequence(&seq(b"ACGTACGTACGTACGTACGT"));
+        }
+        assert!(
+            m.kmers.is_empty(),
+            "no sequence should be sampled before the 50th"
+        );
+
+        m.process_sequence(&seq(b"ACGTACGTACGTACGTACGT"));
+        assert!(!m.kmers.is_empty(), "the 50th sequence must be sampled");
+    }
+
+    #[test]
+    fn sequences_shorter_than_kmer_size_are_skipped_without_panicking() {
+        let mut m = KmerContent::new(7);
+        for _ in 0..50 {
+            m.process_sequence(&seq(b"ACGT")); // shorter than kmer_size
+        }
+        assert!(m.kmers.is_empty());
+        let config = default_config();
+        m.calculate_results(&config); // must not panic on empty accumulated data
+        assert_eq!(m.result(), QCResult::Pass);
+    }
+
+    #[test]
+    fn kmers_containing_n_are_not_counted() {
+        let mut m = KmerContent::new(3);
+        for _ in 0..50 {
+            m.process_sequence(&seq(b"ANGACGTACGTACGTACGT"));
+        }
+        assert!(
+            !m.kmers.keys().any(|k| k.contains(&b'N')),
+            "no counted kmer should contain N"
+        );
+    }
+
+    #[test]
+    fn kmer_fixed_at_one_position_is_flagged_as_enriched() {
+        // "GAT" appears at a fixed position (0) in every sampled read, while
+        // the rest of the read is a single low-diversity filler kmer ("AAA")
+        // that dominates the overall kmer pool. That skew should make "GAT"
+        // surface as a significant, positionally-enriched kmer.
+        let mut m = KmerContent::new(3);
+        for _ in 0..5000 {
+            let mut s = b"GAT".to_vec();
+            s.extend(std::iter::repeat_n(b'A', 20));
+            m.process_sequence(&seq(&s));
+        }
+        let config = default_config();
+        m.calculate_results(&config);
+
+        assert!(
+            m.result_entries.iter().any(|r| r.sequence == "GAT"),
+            "positionally-fixed kmer should be flagged as enriched: {:?}",
+            m.result_entries
+                .iter()
+                .map(|r| &r.sequence)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn merge_matches_processing_all_sequences_in_one_instance() {
+        let seqs: Vec<Sequence> = (0..1000)
+            .map(|i| {
+                let bases = b"ACGT";
+                let s: Vec<u8> = (0..30).map(|j| bases[(i + j) % 4]).collect();
+                seq(&s)
+            })
+            .collect();
+
+        let mut combined = KmerContent::new(5);
+        for s in &seqs {
+            combined.process_sequence(s);
+        }
+
+        // Split contiguously at a multiple of SAMPLING_RATE (500), so each
+        // half's independent counter samples exactly the reads `combined`'s
+        // single counter would have sampled at that point in the stream.
+        // An interleaved (e.g. even/odd) split would sample a genuinely
+        // different subset per instance — that's a real property of the
+        // modulo-based sampling counter being per-instance, not something
+        // merge_from can or should paper over. This test isolates
+        // merge_from's own arithmetic correctness given matching samples.
+        let mut a = KmerContent::new(5);
+        let mut b = KmerContent::new(5);
+        for s in &seqs[..500] {
+            a.process_sequence(s);
+        }
+        for s in &seqs[500..] {
+            b.process_sequence(s);
+        }
+        a.merge_from(&mut b);
+
+        assert_eq!(combined.total_sequences, a.total_sequences);
+        assert_eq!(combined.total_kmer_counts, a.total_kmer_counts);
+        assert_eq!(combined.kmers.len(), a.kmers.len());
+        for (kmer, info) in &combined.kmers {
+            let merged_info = a.kmers.get(kmer).unwrap_or_else(|| {
+                panic!(
+                    "kmer {:?} missing after merge",
+                    String::from_utf8_lossy(kmer)
+                )
+            });
+            assert_eq!(info.count, merged_info.count);
+            assert_eq!(info.positions, merged_info.positions);
+        }
+    }
+}
