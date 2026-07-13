@@ -58,6 +58,16 @@ pub trait QCModule: Send {
     /// Process one sequence
     fn process_sequence(&mut self, seq: &Sequence);
 
+    /// Whether this module must still see filter-failed reads (via
+    /// `process_sequence`) even when the run is excluding them from
+    /// analysis. Only `BasicStats` needs this — it reports how many reads
+    /// were filtered out (`Sequences flagged as poor quality`), which
+    /// requires seeing every read; every other module gets skipped for a
+    /// filter-failed read unless `--nofilter` is set. See `--nofilter`.
+    fn wants_filtered_reads(&self) -> bool {
+        false
+    }
+
     /// Calculate final results after all sequences processed
     fn calculate_results(&mut self, config: &FastQCConfig);
 
@@ -119,6 +129,29 @@ pub fn merge_module_sets(target: &mut [Box<dyn QCModule>], source: &mut [Box<dyn
         );
         t.merge_from(s.as_mut());
     }
+}
+
+/// Whether `process_sequence` should be called on `module` for `seq`, given
+/// this run's `--nofilter` setting. Shared by the sequential (`main.rs`) and
+/// parallel-worker (`parallel.rs`) processing loops so the filtering policy
+/// can't drift between the two.
+pub fn should_process(seq: &Sequence, nofilter: bool, module: &dyn QCModule) -> bool {
+    !seq.filtered || nofilter || module.wants_filtered_reads()
+}
+
+/// The `Total Sequences` value from the `BasicStats` module, if present.
+///
+/// This is the post-filter count (excludes filter-failed reads unless
+/// `--nofilter`), matching what `fastqc_data.txt` reports. Callers building
+/// a `FileSummary`/TSV row should use this instead of a raw per-read counter
+/// — otherwise the console progress line and TSV summary report a different
+/// "total sequences" than each file's own report whenever any reads are
+/// filtered under default settings.
+pub fn basic_stats_total_sequences(modules: &mut [Box<dyn QCModule>]) -> Option<u64> {
+    modules
+        .iter_mut()
+        .find_map(|m| m.as_any_mut().downcast_mut::<basic_stats::BasicStats>())
+        .map(|b| b.total_sequences())
 }
 
 /// Parse tab-separated text_data into a JSON object with headers and rows.
@@ -296,7 +329,7 @@ impl ModuleFactory {
     pub fn create_modules(config: &FastQCConfig) -> Vec<Box<dyn QCModule>> {
         let mut modules: Vec<Box<dyn QCModule>> = Vec::new();
 
-        modules.push(Box::new(basic_stats::BasicStats::new()));
+        modules.push(Box::new(basic_stats::BasicStats::new(config.nofilter)));
 
         if !config.is_ignored("quality_base") {
             modules.push(Box::new(per_base_quality::PerBaseQuality::new()));

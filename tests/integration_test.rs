@@ -552,3 +552,70 @@ fn test_serve_without_input_files_starts_server() {
         "rastqc --serve (no input files) never opened its port"
     );
 }
+
+#[test]
+fn test_nofilter_flag_controls_whether_filtered_reads_are_counted() {
+    // Illumina header filter flag: "...readNum:filterFlag:0:index". A "Y" in
+    // that field means the read failed the chastity/purity filter.
+    let outdir = test_dir().join("nofilter");
+    let _ = fs::create_dir_all(&outdir);
+    let input = outdir.join("test.fastq");
+
+    write_fastq(
+        &input,
+        &[
+            ("r1 1:N:0:1", "ACTGACTGACTGACTGACTG", "IIIIIIIIIIIIIIIIIIII"),
+            ("r2 1:Y:0:1", "GCTAGCTAGCTAGCTAGCTA", "IIIIIIIIIIIIIIIIIIII"),
+        ],
+    );
+
+    // Default: the filter-failed read is excluded from Total Sequences.
+    let default_outdir = outdir.join("default");
+    let _ = fs::create_dir_all(&default_outdir);
+    let output = Command::new(binary_path())
+        .args(["--extract", "--summary", "--quiet", "-o"])
+        .arg(&default_outdir)
+        .arg(&input)
+        .output()
+        .expect("Failed to run rastqc");
+    assert!(output.status.success());
+    let data = fs::read_to_string(default_outdir.join("test_fastqc/fastqc_data.txt")).unwrap();
+    assert!(
+        data.contains("Total Sequences\t1"),
+        "default run should exclude the filter-failed read: {data}"
+    );
+    assert!(
+        data.contains("Sequences flagged as poor quality\t1"),
+        "default run should still report the filtered count: {data}"
+    );
+
+    // The TSV summary's "Total Sequences" column must agree with
+    // fastqc_data.txt's — both derive from the same post-filter count, so a
+    // run with filtered reads shouldn't report two different totals
+    // depending on which output file you look at.
+    let tsv = fs::read_to_string(default_outdir.join("summary.tsv")).unwrap();
+    let data_row = tsv.lines().nth(1).expect("summary.tsv needs a data row");
+    let tsv_total: u64 = data_row.split('\t').next_back().unwrap().parse().unwrap();
+    assert_eq!(
+        tsv_total, 1,
+        "summary.tsv Total Sequences must match fastqc_data.txt's post-filter count"
+    );
+
+    // --nofilter: both reads are included.
+    let nofilter_outdir = outdir.join("nofilter_on");
+    let _ = fs::create_dir_all(&nofilter_outdir);
+    let output = Command::new(binary_path())
+        .args(["--extract", "--quiet", "--nofilter", "-o"])
+        .arg(&nofilter_outdir)
+        .arg(&input)
+        .output()
+        .expect("Failed to run rastqc");
+    assert!(output.status.success());
+    let data = fs::read_to_string(nofilter_outdir.join("test_fastqc/fastqc_data.txt")).unwrap();
+    assert!(
+        data.contains("Total Sequences\t2"),
+        "--nofilter should include the filter-failed read: {data}"
+    );
+
+    cleanup(&outdir);
+}

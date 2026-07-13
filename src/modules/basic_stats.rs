@@ -17,10 +17,14 @@ pub struct BasicStats {
     lowest_char: u8,
     encoding: Option<PhredEncoding>,
     gc_percent: f64,
+    /// Mirrors `--nofilter`: when false (the default, matching FastQC),
+    /// filter-failed reads are counted into `filtered_sequences` but
+    /// excluded from every other statistic.
+    nofilter: bool,
 }
 
 impl BasicStats {
-    pub fn new() -> Self {
+    pub fn new(nofilter: bool) -> Self {
         BasicStats {
             total_sequences: 0,
             filtered_sequences: 0,
@@ -35,10 +39,10 @@ impl BasicStats {
             lowest_char: 255,
             encoding: None,
             gc_percent: 0.0,
+            nofilter,
         }
     }
 
-    #[allow(dead_code)]
     pub fn total_sequences(&self) -> u64 {
         self.total_sequences
     }
@@ -72,11 +76,20 @@ impl QCModule for BasicStats {
         "basic_statistics"
     }
 
+    fn wants_filtered_reads(&self) -> bool {
+        true
+    }
+
     fn process_sequence(&mut self, seq: &Sequence) {
-        self.total_sequences += 1;
         if seq.filtered {
             self.filtered_sequences += 1;
+            if !self.nofilter {
+                // Excluded from analysis by default (matches FastQC):
+                // counted as filtered, but not folded into any other stat.
+                return;
+            }
         }
+        self.total_sequences += 1;
 
         let len = seq.len();
         if len < self.min_length {
@@ -207,13 +220,22 @@ mod tests {
         }
     }
 
+    fn make_filtered_seq(seq: &[u8], qual: &[u8]) -> Sequence {
+        Sequence {
+            header: "@test".to_string(),
+            sequence: seq.to_vec(),
+            quality: qual.to_vec(),
+            filtered: true,
+        }
+    }
+
     fn default_config() -> FastQCConfig {
         FastQCConfig::new(None, None, None, 7, false, 50).unwrap()
     }
 
     #[test]
     fn test_counts_sequences() {
-        let mut m = BasicStats::new();
+        let mut m = BasicStats::new(false);
         let config = default_config();
         m.process_sequence(&make_seq(b"ACTG", b"IIII"));
         m.process_sequence(&make_seq(b"ACTG", b"IIII"));
@@ -223,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_gc_percent() {
-        let mut m = BasicStats::new();
+        let mut m = BasicStats::new(false);
         let config = default_config();
         // 50% GC
         m.process_sequence(&make_seq(b"AACCGGTT", b"IIIIIIII"));
@@ -233,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_length_range() {
-        let mut m = BasicStats::new();
+        let mut m = BasicStats::new(false);
         let config = default_config();
         m.process_sequence(&make_seq(b"ACTG", b"IIII"));
         m.process_sequence(&make_seq(b"ACTGACTG", b"IIIIIIII"));
@@ -244,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_encoding_sanger() {
-        let mut m = BasicStats::new();
+        let mut m = BasicStats::new(false);
         let config = default_config();
         m.process_sequence(&make_seq(b"ACTG", b"!@#$")); // lowest is '!' = 33
         m.calculate_results(&config);
@@ -253,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_text_data_format() {
-        let mut m = BasicStats::new();
+        let mut m = BasicStats::new(false);
         let config = default_config();
         m.process_sequence(&make_seq(b"ACTG", b"IIII"));
         m.calculate_results(&config);
@@ -261,5 +283,53 @@ mod tests {
         assert!(text.starts_with(">>Basic Statistics\tPASS"));
         assert!(text.contains("Total Sequences\t1"));
         assert!(text.ends_with(">>END_MODULE\n"));
+    }
+
+    #[test]
+    fn filtered_reads_are_excluded_from_totals_by_default() {
+        // Matches FastQC: with filtering active (the default, nofilter=false),
+        // a filter-failed read is counted in "Sequences flagged as poor
+        // quality" but excluded from Total Sequences and every other stat
+        // (length, GC, encoding).
+        let mut m = BasicStats::new(false);
+        let config = default_config();
+        m.process_sequence(&make_seq(b"ACTG", b"IIII"));
+        m.process_sequence(&make_filtered_seq(b"AAAAAAAAAAAAAAAA", b"!!!!!!!!!!!!!!!!"));
+        m.calculate_results(&config);
+
+        assert_eq!(
+            m.total_sequences(),
+            1,
+            "filtered read must not count toward Total Sequences"
+        );
+        assert_eq!(
+            m.max_length(),
+            4,
+            "filtered read's length must not affect the length range"
+        );
+        let text = m.text_data();
+        assert!(text.contains("Sequences flagged as poor quality\t1"));
+    }
+
+    #[test]
+    fn nofilter_includes_filtered_reads_in_totals() {
+        // With --nofilter, filtered reads are folded into every stat just
+        // like any other read.
+        let mut m = BasicStats::new(true);
+        let config = default_config();
+        m.process_sequence(&make_seq(b"ACTG", b"IIII"));
+        m.process_sequence(&make_filtered_seq(b"ACTGACTG", b"IIIIIIII"));
+        m.calculate_results(&config);
+
+        assert_eq!(
+            m.total_sequences(),
+            2,
+            "--nofilter must include filtered reads in Total Sequences"
+        );
+        assert_eq!(
+            m.max_length(),
+            8,
+            "--nofilter must include filtered reads in the length range"
+        );
     }
 }

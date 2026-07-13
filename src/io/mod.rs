@@ -6,7 +6,159 @@ mod fastq;
 mod pod5;
 
 use anyhow::{bail, Result};
+use std::io::{self, BufRead};
 use std::path::Path;
+
+/// Generous but bounded per-line cap for text-format readers (FASTQ/FASTA).
+///
+/// `BufRead::read_line` grows its output buffer without limit until it finds
+/// a newline (or hits EOF), so a corrupted/truncated file, or a binary file
+/// misidentified as text, with a very long or missing newline can allocate
+/// unbounded memory before any of the readers' own record-level validation
+/// gets a chance to run. Real long-read sequencing (ONT ultra-long reads) can
+/// exceed a few megabases, so this is set far above any realistic read length
+/// while still bounding worst-case memory use.
+const MAX_LINE_LEN: usize = 256 * 1024 * 1024;
+
+/// Like `BufRead::read_line`, but errors instead of growing `buf` without
+/// bound if no newline is found within `MAX_LINE_LEN` bytes.
+///
+/// `scratch` is a caller-owned byte buffer reused across calls (cleared each
+/// call): without it, every call would allocate a fresh `Vec` from scratch,
+/// throwing away the capacity-reuse the callers already rely on for their
+/// per-record `String` buffers (one call per line, so this matters — 4x per
+/// FASTQ record, 1x per FASTA line).
+pub(crate) fn read_line_bounded<R: BufRead + ?Sized>(
+    reader: &mut R,
+    buf: &mut String,
+    scratch: &mut Vec<u8>,
+) -> io::Result<usize> {
+    read_line_bounded_with_limit(reader, buf, scratch, MAX_LINE_LEN)
+}
+
+fn read_line_bounded_with_limit<R: BufRead + ?Sized>(
+    reader: &mut R,
+    buf: &mut String,
+    scratch: &mut Vec<u8>,
+    max_len: usize,
+) -> io::Result<usize> {
+    scratch.clear();
+    loop {
+        let (found_newline, consumed) = {
+            let available = reader.fill_buf()?;
+            if available.is_empty() {
+                (true, 0)
+            } else if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+                scratch.extend_from_slice(&available[..=pos]);
+                (true, pos + 1)
+            } else {
+                scratch.extend_from_slice(available);
+                (false, available.len())
+            }
+        };
+        reader.consume(consumed);
+        if scratch.len() > max_len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "line exceeds maximum length of {} bytes (malformed or corrupted input?)",
+                    max_len
+                ),
+            ));
+        }
+        if found_newline {
+            break;
+        }
+    }
+    let s =
+        std::str::from_utf8(scratch).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let n = s.len();
+    buf.push_str(s);
+    Ok(n)
+}
+
+#[cfg(test)]
+mod read_line_bounded_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn reads_normal_line_including_newline() {
+        let mut reader = Cursor::new(b"hello\nworld\n".to_vec());
+        let mut buf = String::new();
+        let mut scratch = Vec::new();
+        let n = read_line_bounded_with_limit(&mut reader, &mut buf, &mut scratch, 1024).unwrap();
+        assert_eq!(buf, "hello\n");
+        assert_eq!(n, 6);
+    }
+
+    #[test]
+    fn reads_final_line_without_trailing_newline() {
+        let mut reader = Cursor::new(b"hello".to_vec());
+        let mut buf = String::new();
+        let mut scratch = Vec::new();
+        let n = read_line_bounded_with_limit(&mut reader, &mut buf, &mut scratch, 1024).unwrap();
+        assert_eq!(buf, "hello");
+        assert_eq!(n, 5);
+    }
+
+    #[test]
+    fn returns_zero_at_eof() {
+        let mut reader = Cursor::new(Vec::new());
+        let mut buf = String::new();
+        let mut scratch = Vec::new();
+        let n = read_line_bounded_with_limit(&mut reader, &mut buf, &mut scratch, 1024).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(buf, "");
+    }
+
+    #[test]
+    fn errors_instead_of_growing_unbounded_when_no_newline_within_limit() {
+        // A line with no newline that exceeds the cap must error, not
+        // silently keep allocating (the scenario this guards against: a
+        // corrupted/binary file misidentified as FASTQ/FASTA with a very
+        // long or missing newline).
+        let data = vec![b'A'; 10_000];
+        let mut reader = Cursor::new(data);
+        let mut buf = String::new();
+        let mut scratch = Vec::new();
+        let err =
+            read_line_bounded_with_limit(&mut reader, &mut buf, &mut scratch, 100).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("exceeds maximum length"));
+    }
+
+    #[test]
+    fn a_line_within_the_limit_across_multiple_fill_buf_chunks_still_succeeds() {
+        // Cursor's fill_buf returns everything at once, so wrap in a reader
+        // that yields one byte per call to exercise the multi-iteration
+        // accumulation path (real BufReaders hand back whatever happens to
+        // be in their internal buffer, not necessarily the whole line).
+        struct OneByteAtATime(Cursor<Vec<u8>>);
+        impl BufRead for OneByteAtATime {
+            fn fill_buf(&mut self) -> io::Result<&[u8]> {
+                let buf = self.0.fill_buf()?;
+                let n = buf.len().min(1);
+                Ok(&buf[..n])
+            }
+            fn consume(&mut self, amt: usize) {
+                self.0.consume(amt)
+            }
+        }
+        impl std::io::Read for OneByteAtATime {
+            fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+                self.0.read(out)
+            }
+        }
+
+        let mut reader = OneByteAtATime(Cursor::new(b"hello world\n".to_vec()));
+        let mut buf = String::new();
+        let mut scratch = Vec::new();
+        let n = read_line_bounded_with_limit(&mut reader, &mut buf, &mut scratch, 1024).unwrap();
+        assert_eq!(buf, "hello world\n");
+        assert_eq!(n, 12);
+    }
+}
 
 /// A single sequence record
 #[derive(Debug, Clone)]

@@ -318,7 +318,7 @@ fn process_file(
 
     // Choose between streaming parallel and sequential processing
     let qc_start = Instant::now();
-    let (qc_modules, count) =
+    let (mut qc_modules, count) =
         if !is_stdin && !cli.no_parallel && parallel::should_use_parallel(file) {
             parallel::process_file_parallel(file, config, cli.threads)?
         } else {
@@ -332,6 +332,9 @@ fn process_file(
             let mut count: u64 = 0;
             while let Some(seq) = reader.next_sequence()? {
                 for module in &mut qc_modules {
+                    if !modules::should_process(&seq, config.nofilter, module.as_ref()) {
+                        continue;
+                    }
                     module.process_sequence(&seq);
                 }
                 count += 1;
@@ -343,6 +346,16 @@ fn process_file(
             (qc_modules, count)
         };
     let read_and_qc_secs = qc_start.elapsed().as_secs_f64();
+
+    // Prefer BasicStats' post-filter count (matches fastqc_data.txt's "Total
+    // Sequences") over the raw per-read `count` above, so the console
+    // progress line and TSV summary agree with each file's own report
+    // instead of disagreeing whenever reads are filtered under default
+    // settings. `count` itself stays raw for the rare case BasicStats was
+    // disabled (it can't be, via `--ignore`, but this keeps the fallback
+    // honest rather than assuming BasicStats is always present).
+    let reported_total_sequences =
+        modules::basic_stats_total_sequences(&mut qc_modules).unwrap_or(count);
 
     // Determine output base name
     let filename = if is_stdin {
@@ -432,7 +445,7 @@ fn process_file(
     Ok(FileSummary {
         filename,
         module_results,
-        total_sequences: count,
+        total_sequences: reported_total_sequences,
         report_path,
         timing,
     })
@@ -579,8 +592,59 @@ fn print_final_tally(summaries: &[FileSummary], total_files: usize, elapsed: f64
 
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("...{}", &s[s.len() - (max_len - 3)..])
+        return s.to_string();
+    }
+    // max_len < 3 can't fit the "..." prefix; the target-index subtraction
+    // below would underflow, so just fall back to the "..." marker itself.
+    if max_len < 3 {
+        return "...".to_string();
+    }
+    let target = s.len() - (max_len - 3);
+    // Byte-slicing at `target` can land mid-codepoint for multi-byte UTF-8
+    // filenames; walk forward to the next char boundary.
+    let start = (target..=s.len())
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(s.len());
+    format!("...{}", &s[start..])
+}
+
+#[cfg(test)]
+mod truncate_str_tests {
+    use super::truncate_str;
+
+    #[test]
+    fn short_string_is_unchanged() {
+        assert_eq!(truncate_str("sample.fastq.gz", 35), "sample.fastq.gz");
+    }
+
+    #[test]
+    fn long_ascii_string_is_truncated_with_ellipsis() {
+        let s = "a_very_long_sample_filename_R1_001.fastq.gz";
+        let out = truncate_str(s, 20);
+        assert!(out.starts_with("..."));
+        assert!(out.len() <= 20);
+    }
+
+    #[test]
+    fn long_multibyte_utf8_filename_does_not_panic() {
+        // Non-ASCII (3-byte-per-char CJK) filename longer than max_len must
+        // not panic by slicing mid-codepoint.
+        let s = "样样样样样样样样样样样样样样样样样样样样.fastq.gz";
+        let out = truncate_str(s, 35);
+        assert!(out.starts_with("..."));
+        // The result must itself be valid UTF-8 (guaranteed by the type
+        // system once slicing doesn't panic) and non-empty.
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn max_len_below_ellipsis_width_does_not_underflow() {
+        // max_len < 3 can't fit "...", so `max_len - 3` would underflow the
+        // subtraction below it. Currently unreachable (the one call site
+        // hardcodes 35) but must not panic if that ever changes.
+        let s = "a_long_filename.fastq.gz";
+        assert_eq!(truncate_str(s, 0), "...");
+        assert_eq!(truncate_str(s, 1), "...");
+        assert_eq!(truncate_str(s, 2), "...");
     }
 }

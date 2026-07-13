@@ -1,6 +1,6 @@
 use crate::config::FastQCConfig;
 use crate::io::{Sequence, SequenceReader};
-use crate::modules::{merge_module_sets, ModuleFactory, QCModule};
+use crate::modules::{merge_module_sets, should_process, ModuleFactory, QCModule};
 use anyhow::Result;
 use crossbeam::channel;
 use std::path::Path;
@@ -99,6 +99,9 @@ pub fn process_file_parallel(
             while let Ok(batch) = rx.recv() {
                 for seq in &batch {
                     for module in modules.iter_mut() {
+                        if !should_process(seq, worker_config.nofilter, module.as_ref()) {
+                            continue;
+                        }
                         module.process_sequence(seq);
                     }
                     count += 1;
