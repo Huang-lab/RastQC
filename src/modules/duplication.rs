@@ -4,6 +4,18 @@ use crate::io::Sequence;
 use std::any::Any;
 use std::collections::HashMap;
 
+/// Cap on distinct sequences tracked before "freezing" (matching FastQC's own
+/// bounded-memory approach). Note for the streaming-parallel path: this cap
+/// is per-worker, not global — each worker thread freezes independently
+/// based only on the distinct sequences *it* has seen, so the specific point
+/// at which tracking freezes (and thus `count_at_unique_limit`, which feeds
+/// `get_corrected_count`'s binomial correction) can differ between a
+/// sequential run and a parallel run of the same file, and between the
+/// individual workers of a single parallel run. In practice this cap is
+/// rarely reached (100k distinct sequences is a lot), so it mostly matters
+/// for extremely diverse/large inputs; see the identical caveat on
+/// `KmerContent`'s sampling for the same class of intra-file-parallelism
+/// tradeoff.
 const OBSERVATION_CUTOFF: usize = 100_000;
 
 /// Duplication level bin labels matching FastQC (16 bins, 0-indexed).
@@ -139,17 +151,27 @@ impl QCModule for DuplicationLevel {
             if let Some(count) = self.sequences.get_mut(&self.upper_buf) {
                 *count += 1;
             }
-        } else {
-            let entry = self.sequences.entry(self.upper_buf.clone()).or_insert(0);
-            *entry += 1;
-            if *entry == 1 {
+            return;
+        }
+
+        // `HashMap::entry` needs an owned key up front, so
+        // `entry(self.upper_buf.clone()).or_insert(0)` used to clone on
+        // *every* call here, including the common case where this exact
+        // sequence (post-truncation) has already been seen many times —
+        // e.g. any read that's part of a duplicated/overrepresented cluster.
+        // Look up by reference first and only pay for the clone on the
+        // genuinely-new-sequence path.
+        match self.sequences.get_mut(&self.upper_buf) {
+            Some(count) => *count += 1,
+            None => {
+                self.sequences.insert(self.upper_buf.clone(), 1);
                 self.unique_count += 1;
             }
-            self.count_at_unique_limit = self.total_sequences;
+        }
+        self.count_at_unique_limit = self.total_sequences;
 
-            if self.unique_count >= OBSERVATION_CUTOFF {
-                self.frozen = true;
-            }
+        if self.unique_count >= OBSERVATION_CUTOFF {
+            self.frozen = true;
         }
     }
 
@@ -366,6 +388,46 @@ impl QCModule for DuplicationLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seq(bases: &[u8]) -> Sequence {
+        Sequence {
+            header: "@t".to_string(),
+            sequence: bases.to_vec(),
+            quality: vec![b'I'; bases.len()],
+            filtered: false,
+        }
+    }
+
+    #[test]
+    fn repeated_sequences_are_counted_correctly_after_the_first_sighting() {
+        // Regression test for the clone-avoidance refactor in
+        // process_sequence: a sequence seen many times must still increment
+        // the same HashMap entry every time, not just on first sight.
+        let mut m = DuplicationLevel::new(50);
+        for _ in 0..5 {
+            m.process_sequence(&seq(b"ACGTACGTACGT"));
+        }
+        m.process_sequence(&seq(b"TTTTGGGGCCCC"));
+
+        assert_eq!(m.total_sequences, 6);
+        assert_eq!(m.unique_count, 2);
+        assert_eq!(*m.sequences.get(b"ACGTACGTACGT".as_slice()).unwrap(), 5);
+        assert_eq!(*m.sequences.get(b"TTTTGGGGCCCC".as_slice()).unwrap(), 1);
+        assert_eq!(m.count_at_unique_limit, 6);
+    }
+
+    #[test]
+    fn sequence_case_is_normalized_before_counting() {
+        // Lowercase and uppercase forms of the same sequence must land in
+        // the same bucket (the get_mut-then-insert refactor must not bypass
+        // the existing to_ascii_uppercase() normalization).
+        let mut m = DuplicationLevel::new(50);
+        m.process_sequence(&seq(b"acgtACGT"));
+        m.process_sequence(&seq(b"ACGTacgt"));
+
+        assert_eq!(m.unique_count, 1, "case-insensitive dedup must merge both reads into one entry");
+        assert_eq!(*m.sequences.get(b"ACGTACGT".as_slice()).unwrap(), 2);
+    }
 
     #[test]
     fn get_corrected_count_returns_observations_when_all_sequences_tracked() {
