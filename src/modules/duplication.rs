@@ -425,7 +425,10 @@ mod tests {
         m.process_sequence(&seq(b"acgtACGT"));
         m.process_sequence(&seq(b"ACGTacgt"));
 
-        assert_eq!(m.unique_count, 1, "case-insensitive dedup must merge both reads into one entry");
+        assert_eq!(
+            m.unique_count, 1,
+            "case-insensitive dedup must merge both reads into one entry"
+        );
         assert_eq!(*m.sequences.get(b"ACGTACGT".as_slice()).unwrap(), 2);
     }
 
