@@ -103,7 +103,9 @@ mod tests {
 
     fn reader_for(contents: &str) -> FastaReader {
         FastaReader {
-            reader: Box::new(BufReader::new(std::io::Cursor::new(contents.as_bytes().to_vec()))),
+            reader: Box::new(BufReader::new(std::io::Cursor::new(
+                contents.as_bytes().to_vec(),
+            ))),
             header: None,
             line_scratch: Vec::new(),
         }
