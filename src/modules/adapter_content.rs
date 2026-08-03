@@ -1,6 +1,7 @@
 use super::{format_pct_label, BaseGroup, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
+use crate::report::html_escape;
 use std::any::Any;
 
 struct AdapterTracker {
@@ -270,7 +271,7 @@ impl QCModule for AdapterContent {
             svg.push_str(&format!(
                 r##"<text x="{}" y="{y}" dominant-baseline="middle" font-size="9">{}</text>"##,
                 ml + pw - 180.0,
-                adapter.name
+                html_escape(&adapter.name)
             ));
         }
 
@@ -324,5 +325,49 @@ impl QCModule for AdapterContent {
 
     fn supports_merge(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::Sequence;
+
+    fn config_with_adapter_name(name: &str) -> FastQCConfig {
+        let dir = std::env::temp_dir().join(format!(
+            "rastqc-adapter-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("adapters.tsv");
+        std::fs::write(&path, format!("{}\tAGATCGGAAGAG\n", name)).unwrap();
+        FastQCConfig::new(None, Some(&path), None, 7, false, 50).unwrap()
+    }
+
+    fn seq(bases: &[u8]) -> Sequence {
+        Sequence {
+            header: "r".to_string(),
+            sequence: bases.to_vec(),
+            quality: vec![b'I'; bases.len()],
+            filtered: false,
+        }
+    }
+
+    #[test]
+    fn svg_chart_escapes_adapter_names_from_config() {
+        // Regression test: an adapter name containing HTML/SVG metacharacters
+        // (loaded verbatim from a user-supplied --adapters file, which does
+        // no sanitization) used to be written raw into the SVG legend,
+        // letting a crafted adapter name inject markup/script into the
+        // generated HTML report.
+        let config = config_with_adapter_name("Evil</text><script>alert(1)</script>");
+        let mut module = AdapterContent::new(&config);
+        module.process_sequence(&seq(b"AGATCGGAAGAGACGT"));
+        module.calculate_results(&config);
+
+        let svg = module.svg_chart();
+        assert!(!svg.contains("<script>"));
+        assert!(svg.contains("&lt;script&gt;"));
     }
 }
