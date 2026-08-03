@@ -147,18 +147,40 @@ fn parse_adapter_list(content: &str) -> Vec<Adapter> {
         .collect()
 }
 
+/// Complement a single IUPAC nucleotide code (uppercase input expected —
+/// callers upper-case the sequence before calling this).
+///
+/// Contaminant/adapter lists occasionally use IUPAC ambiguity codes (e.g. `R`
+/// for A-or-G, `K` for G-or-T) rather than only literal A/C/G/T/N. Before
+/// this, any such code fell through to `other => other` and was passed
+/// through unchanged instead of complemented, silently corrupting the
+/// `reverse_complement` used for contaminant matching in
+/// `OverrepresentedSeqs::find_contaminant` (e.g. `R` should complement to
+/// `Y`, not stay `R`) — real sequences would then fail to match their
+/// contaminant's reverse-complement orientation.
+fn complement_base(c: char) -> char {
+    match c {
+        'A' => 'T',
+        'T' | 'U' => 'A',
+        'C' => 'G',
+        'G' => 'C',
+        'R' => 'Y', // A/G -> T/C
+        'Y' => 'R', // C/T -> G/A
+        'S' => 'S', // C/G -> G/C (self-complementary)
+        'W' => 'W', // A/T -> T/A (self-complementary)
+        'K' => 'M', // G/T -> C/A
+        'M' => 'K', // A/C -> T/G
+        'B' => 'V', // C/G/T -> G/C/A
+        'V' => 'B', // A/C/G -> T/G/C
+        'D' => 'H', // A/G/T -> T/C/A
+        'H' => 'D', // A/C/T -> T/G/A
+        'N' => 'N',
+        other => other,
+    }
+}
+
 fn reverse_complement(seq: &str) -> String {
-    seq.chars()
-        .rev()
-        .map(|c| match c {
-            'A' => 'T',
-            'T' => 'A',
-            'C' => 'G',
-            'G' => 'C',
-            'N' => 'N',
-            other => other,
-        })
-        .collect()
+    seq.chars().rev().map(complement_base).collect()
 }
 
 fn parse_contaminant_list(content: &str) -> Vec<Contaminant> {
@@ -306,6 +328,24 @@ mod tests {
     fn test_reverse_complement() {
         assert_eq!(reverse_complement("AATTCCGG"), "CCGGAATT");
         assert_eq!(reverse_complement("AAAA"), "TTTT");
+    }
+
+    #[test]
+    fn reverse_complement_handles_iupac_ambiguity_codes() {
+        // Regression test: ambiguity codes used to fall through to
+        // `other => other` (passed through unchanged) instead of being
+        // complemented, silently corrupting reverse-complement contaminant
+        // matching for any contaminant/adapter sequence using them.
+        assert_eq!(reverse_complement("R"), "Y"); // A/G -> complement C/T
+        assert_eq!(reverse_complement("Y"), "R");
+        assert_eq!(reverse_complement("K"), "M");
+        assert_eq!(reverse_complement("M"), "K");
+        assert_eq!(reverse_complement("S"), "S"); // self-complementary
+        assert_eq!(reverse_complement("W"), "W"); // self-complementary
+        assert_eq!(reverse_complement("B"), "V");
+        assert_eq!(reverse_complement("D"), "H");
+        // Full round trip on a mixed IUPAC sequence, read in reverse order.
+        assert_eq!(reverse_complement("ACGTRYSWKMBDHVN"), "NBDHVKMWSRYACGT");
     }
 
     #[test]

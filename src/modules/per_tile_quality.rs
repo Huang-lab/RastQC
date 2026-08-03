@@ -68,6 +68,28 @@ impl QCModule for PerTileQuality {
         "tile"
     }
 
+    /// Sampling ("process all first 10000, then 10%") and the `max_tiles`
+    /// give-up cap below both key off `self.total_sequences`/`self.tile_data`,
+    /// which are per-instance state. On the sequential path there's only one
+    /// instance, so this is exactly "first 10000 reads of the file, then
+    /// every 10th". On the streaming-parallel path (`parallel.rs`), each
+    /// worker thread owns an independent `PerTileQuality` and only sees the
+    /// batches the reader happened to hand it — batch-to-worker assignment
+    /// is a race (first-idle-worker-wins on the channel), not a fixed split
+    /// of the file. So which specific reads get sampled (and which tiles get
+    /// "given up" on) can differ both between a sequential and a parallel run
+    /// of the same file, and between two separate parallel runs of the same
+    /// file (since the race can resolve differently run to run).
+    ///
+    /// In practice this mostly perturbs the exact tile-quality heatmap
+    /// values/`max_deviation` rather than flipping PASS/WARN/FAIL outright,
+    /// but it is a real source of non-reproducibility for this module
+    /// specifically. A proper fix would plumb a shared, globally-monotonic
+    /// read index into every worker (e.g. via the batch reader thread, which
+    /// already reads the file in true order) rather than each worker
+    /// counting its own local arrivals — that's a QCModule-trait-level
+    /// change out of scope here; see `KmerContent` for the same class of
+    /// tradeoff, made explicit there via its own sampling counter.
     fn process_sequence(&mut self, seq: &Sequence) {
         if self.gave_up {
             return;
@@ -338,5 +360,118 @@ impl QCModule for PerTileQuality {
 
     fn supports_merge(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_seq(header: &str, quality: &[u8]) -> Sequence {
+        Sequence {
+            header: header.to_string(),
+            sequence: vec![b'A'; quality.len()],
+            quality: quality.to_vec(),
+            filtered: false,
+        }
+    }
+
+    #[test]
+    fn extract_tile_finds_position_4_for_illumina_1_8_plus_headers() {
+        // Illumina 1.8+: instrument:run:flowcell:lane:tile:x:y (7 fields).
+        let mut m = PerTileQuality::new();
+        let tile = m.extract_tile("@M00001:1:AAAAA:1:1101:1000:2000");
+        assert_eq!(tile, Some(1101));
+    }
+
+    #[test]
+    fn extract_tile_finds_position_2_for_older_5_field_headers() {
+        // Older Illumina format: instrument:lane:tile:x:y (5 fields).
+        let mut m = PerTileQuality::new();
+        let tile = m.extract_tile("@HWI-EAS:1:5:1000:2000");
+        assert_eq!(tile, Some(5));
+    }
+
+    #[test]
+    fn extract_tile_returns_none_for_non_illumina_headers() {
+        let mut m = PerTileQuality::new();
+        assert_eq!(m.extract_tile("@read1"), None);
+        assert_eq!(m.extract_tile("@read1 description text"), None);
+    }
+
+    #[test]
+    fn extract_tile_position_locks_in_after_first_successful_detection() {
+        // split_position is cached from the first header seen; a later
+        // header with a different field count still uses the cached
+        // position rather than re-detecting.
+        let mut m = PerTileQuality::new();
+        assert_eq!(
+            m.extract_tile("@M00001:1:AAAAA:1:1101:1000:2000"),
+            Some(1101)
+        );
+        assert_eq!(m.split_position, Some(4));
+        // A subsequent malformed/short header still tries position 4 (may
+        // legitimately fail to parse, but must not re-run auto-detection).
+        assert_eq!(m.extract_tile("@short:header"), None);
+        assert_eq!(m.split_position, Some(4));
+    }
+
+    #[test]
+    fn gives_up_once_max_tiles_cap_is_reached_by_a_genuinely_new_tile() {
+        let mut m = PerTileQuality::new();
+        m.max_tiles = 2; // force the cap low so the test doesn't need 2500 tiles
+
+        m.process_sequence(&make_seq("@I:R:F:L:1:1:1", b"IIII"));
+        m.process_sequence(&make_seq("@I:R:F:L:2:1:1", b"IIII"));
+        assert!(!m.gave_up, "cap not yet exceeded with 2 distinct tiles");
+
+        // A third, never-seen tile pushes past the cap.
+        m.process_sequence(&make_seq("@I:R:F:L:3:1:1", b"IIII"));
+        assert!(m.gave_up);
+        assert_eq!(
+            m.tile_data.len(),
+            2,
+            "the tile that tipped us over the cap must not be recorded"
+        );
+
+        // Once given up, further calls (even for already-known tiles) are
+        // no-ops.
+        m.process_sequence(&make_seq("@I:R:F:L:1:1:1", b"IIII"));
+        assert_eq!(m.tile_data.len(), 2);
+    }
+
+    #[test]
+    fn merge_from_sums_shared_tile_positions_and_total_sequences() {
+        let mut a = PerTileQuality::new();
+        let mut b = PerTileQuality::new();
+
+        a.process_sequence(&make_seq("@I:R:F:L:100:1:1", b"IIII")); // 'I' = 73
+        b.process_sequence(&make_seq("@I:R:F:L:100:1:1", b"IIII"));
+        b.process_sequence(&make_seq("@I:R:F:L:200:1:1", b"IIII"));
+
+        a.merge_from(&mut b);
+
+        assert_eq!(a.total_sequences, 3);
+        assert_eq!(a.tile_data.len(), 2, "tiles 100 and 200 both present");
+        let tile_100 = &a.tile_data[&100];
+        assert_eq!(tile_100.len(), 4);
+        for &(sum, count) in tile_100 {
+            assert_eq!(count, 2, "tile 100 was seen once in each instance");
+            assert!((sum - 2.0 * b'I' as f64).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn merge_from_ors_gave_up_flag() {
+        let mut a = PerTileQuality::new();
+        let mut b = PerTileQuality::new();
+        b.gave_up = true;
+
+        a.merge_from(&mut b);
+
+        assert!(
+            a.gave_up,
+            "if either worker gave up, the merged module must reflect that"
+        );
     }
 }

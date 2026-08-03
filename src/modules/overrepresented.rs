@@ -4,6 +4,11 @@ use crate::io::Sequence;
 use std::any::Any;
 use std::collections::HashMap;
 
+/// Cap on distinct sequences tracked before "freezing" (matching FastQC's own
+/// bounded-memory approach). As with `DuplicationLevel`, this cap is
+/// per-worker on the streaming-parallel path, so exactly when tracking
+/// freezes (and thus `count_at_limit`) can differ between a sequential and
+/// a parallel run of the same file. Rarely reached in practice.
 const OBSERVATION_CUTOFF: usize = 100_000;
 
 pub struct OverrepresentedSeqs {
@@ -153,13 +158,23 @@ impl QCModule for OverrepresentedSeqs {
             if let Some(count) = self.sequences.get_mut(&self.upper_buf) {
                 *count += 1;
             }
-        } else {
-            *self.sequences.entry(self.upper_buf.clone()).or_insert(0) += 1;
+            return;
+        }
 
-            if self.sequences.len() >= OBSERVATION_CUTOFF {
-                self.reached_limit = true;
-                self.count_at_limit = self.total_count;
+        // See the identical comment in `DuplicationLevel::process_sequence`:
+        // avoid cloning `upper_buf` on every call by checking for an
+        // existing entry first, only cloning into an owned key when this
+        // sequence is genuinely new.
+        match self.sequences.get_mut(&self.upper_buf) {
+            Some(count) => *count += 1,
+            None => {
+                self.sequences.insert(self.upper_buf.clone(), 1);
             }
+        }
+
+        if self.sequences.len() >= OBSERVATION_CUTOFF {
+            self.reached_limit = true;
+            self.count_at_limit = self.total_count;
         }
     }
 
@@ -261,5 +276,49 @@ impl QCModule for OverrepresentedSeqs {
 
     fn supports_merge(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seq(bases: &[u8]) -> Sequence {
+        Sequence {
+            header: "@t".to_string(),
+            sequence: bases.to_vec(),
+            quality: vec![b'I'; bases.len()],
+            filtered: false,
+        }
+    }
+
+    #[test]
+    fn repeated_sequences_are_counted_correctly_after_the_first_sighting() {
+        // Regression test for the clone-avoidance refactor in
+        // process_sequence: a sequence seen many times must still increment
+        // the same HashMap entry every time, not just on first sight.
+        let mut m = OverrepresentedSeqs::new(50);
+        for _ in 0..5 {
+            m.process_sequence(&seq(b"ACGTACGTACGT"));
+        }
+        m.process_sequence(&seq(b"TTTTGGGGCCCC"));
+
+        assert_eq!(m.total_count, 6);
+        assert_eq!(*m.sequences.get(b"ACGTACGTACGT".as_slice()).unwrap(), 5);
+        assert_eq!(*m.sequences.get(b"TTTTGGGGCCCC".as_slice()).unwrap(), 1);
+    }
+
+    #[test]
+    fn overrepresented_sequence_is_flagged_above_threshold() {
+        let mut m = OverrepresentedSeqs::new(50);
+        for _ in 0..10 {
+            m.process_sequence(&seq(b"ACGTACGTACGT"));
+        }
+        let config = FastQCConfig::new(None, None, None, 7, false, 50).unwrap();
+        m.calculate_results(&config);
+
+        assert_eq!(m.result(), QCResult::Fail);
+        assert_eq!(m.overrep_entries.len(), 1);
+        assert_eq!(m.overrep_entries[0].count, 10);
     }
 }
