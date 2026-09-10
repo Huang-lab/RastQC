@@ -113,10 +113,12 @@ impl QCModule for PerSequenceGC {
             seq_len = truncated;
         }
 
+        // `| 0x20` lower-cases an ASCII letter, so one OR and two compares
+        // cover both cases of both bases. Branch-free, which lets this
+        // reduce over several bases per instruction.
         for &b in seq_bytes.iter().take(seq_len) {
-            if matches!(b, b'G' | b'C' | b'g' | b'c') {
-                gc_count += 1;
-            }
+            let lower = b | 0x20;
+            gc_count += usize::from(lower == b'g' || lower == b'c');
         }
 
         // Get or create GCModel for this read length

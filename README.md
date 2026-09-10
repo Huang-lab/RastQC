@@ -5,8 +5,8 @@ A fast quality control tool for high-throughput sequencing data, written in Rust
 ## Features
 
 - **15 QC modules**: all 12 FastQC modules + 3 long-read QC modules
-- **Fast**: streaming parallel pipeline — 2-3x faster than FastQC on real sequencing data
-- **Portable**: single 2.1 MB static binary, no Java runtime needed
+- **Fast**: 2.9x faster than Falco single-threaded, 4.7x with 4 threads, on a real 18.7M-read NextSeq run ([benchmarks](benchmark/RESULTS.md))
+- **Portable**: single 2.6 MB static binary, no Java runtime needed
 - **Compatible output**: HTML reports, tab-separated data files, ZIP archives, native MultiQC JSON
 - **Multi-file summary**: overview dashboard when processing many files
 - **Web GUI**: built-in report browser (`--serve`)
@@ -30,7 +30,7 @@ The Bioconda recipe lives in [`recipes/rastqc/`](recipes/rastqc/).
 ### From source
 
 ```bash
-# Requires Rust 1.70+
+# Requires Rust 1.85+
 cargo install --path .
 ```
 
@@ -148,14 +148,16 @@ rastqc/
 │   └── report/
 │       └── mod.rs           # HTML, text, JSON, ZIP, summary generation
 ├── tests/
-│   └── integration_test.rs  # 11 integration tests
+│   └── integration_test.rs  # 16 integration tests
 ├── paper/                   # Manuscript, benchmarks, figures
 └── FastQC/                  # Reference FastQC for concordance testing
 ```
 
 **Data flow**: Files → `SequenceReader` → streaming `Sequence` records → each record passed to all `QCModule` instances → `calculate_results()` → report generation (HTML/text/JSON/ZIP).
 
-**Streaming parallel pipeline** (default for files >50MB): A dedicated reader thread streams batches of sequences through a bounded crossbeam channel to N worker threads, each with independent module instances. After the file is fully read, worker states are merged via `merge_from()`. This avoids buffering the entire file in memory while achieving near-linear speedup with thread count.
+**Streaming parallel pipeline** (default for files >50MB): a reader thread decompresses the file and cuts it into record-aligned blocks, which it hands to two consumers. A pool of N worker threads takes whichever block is next and parses records as slices borrowed from it, so parsing scales with the pool and the hot loop allocates nothing. A single in-order consumer runs the modules that need the file's whole read stream — Sequence Duplication Levels, Overrepresented sequences, Kmer Content and Per tile sequence quality, each of which either keeps a capped observation table or samples off a read counter, and so cannot be reconstructed by merging per-worker partials. Worker states are merged via `merge_from()` at the end. Nothing buffers the whole file, output is identical at any `-t`, and per-worker state no longer scales with thread count.
+
+**Threads**: `-t` is a budget for the whole run. Files are analyzed concurrently and each file runs its own worker pool; the budget is split across the two levels rather than applied to both, and each file's pool is capped at the point where a single file stops benefiting (the reader thread becomes the ceiling). Passing a large `-t` therefore costs neither the thread explosion nor the memory it used to.
 
 All 15 modules implement the `QCModule` trait with `process_sequence()`, `calculate_results()`, `merge_from()` (for parallel chunk merging), and output methods. Modules are created by `ModuleFactory` based on the limits configuration.
 
@@ -285,12 +287,33 @@ RastQC produces output compatible with tools that consume FastQC results:
 
 ## Performance
 
-Benchmarked on real sequencing data (ENA/SRA), 4 threads, macOS ARM64:
+Two comparisons, measured differently — read both.
 
-### Short-read (Illumina)
+### vs Falco (measured for this release)
 
-| File | Size | Reads | FastQC 0.12.1 | RastQC | Speedup |
-|------|------|-------|---------------|--------|---------|
+Intel Core i9-9900K (8C/16T), macOS x86-64, median of 3 runs, peak RSS via
+`/usr/bin/time -l`. Falco is single-threaded — its `-t` flag is documented in
+its own help as "NOT YET IMPLEMENTED" — so `rastqc -t 1` is the like-for-like
+row. Reproduce with `./benchmark/fetch_data.sh && ./benchmark/run_benchmark.sh`.
+
+| Dataset | Falco 1.2.5 | RastQC `-t 1` | RastQC `-t 4` |
+|---------|-------------|---------------|---------------|
+| DRR045135_1 — 18.7M reads, 144 bp, 828 MB | 32.6 s / 86 MB | **11.3 s** / 126 MB | **6.9 s** / 158 MB |
+| DRR048760 — 1.2M reads, 76 bp, 54 MB | 2.32 s / 88 MB | **0.83 s** / 95 MB | **0.67 s** / 128 MB |
+| Both files, one invocation | 35.1 s / 94 MB | — | **8.6 s** / 208 MB |
+
+Full method, and what changed since 0.1.0, in [`benchmark/RESULTS.md`](benchmark/RESULTS.md).
+
+### vs FastQC
+
+Measured on macOS ARM64 with 4 threads against RastQC 0.1.0 — different
+hardware and an older RastQC than the table above, so the two are not directly
+comparable. 0.2.0 is substantially faster than the RastQC column here.
+
+#### Short-read (Illumina)
+
+| File | Size | Reads | FastQC 0.12.1 | RastQC 0.1.0 | Speedup |
+|------|------|-------|---------------|--------------|---------|
 | DRR609229 R1 | 22 MB | 720K | 3.5s | **2.0s** | 1.8x |
 | DRR609229 R2 | 23 MB | 720K | 3.5s | **2.0s** | 1.7x |
 | ERR5897746 R1 | 320 MB | 4.3M | 15.6s | **4.8s** | 3.2x |
@@ -298,28 +321,46 @@ Benchmarked on real sequencing data (ENA/SRA), 4 threads, macOS ARM64:
 | DRR013000 R1 | 1.4 GB | 24.8M | 51.8s | **19.6s** | 2.6x |
 | All 5 files | 2.1 GB | 34.7M | 55.7s | **22.3s** | 2.5x |
 
-### Long-read (ONT / PacBio)
+#### Long-read (ONT / PacBio)
 
-| File | Platform | Size | Reads | Mean Length | FastQC | RastQC | Speedup |
-|------|----------|------|-------|-------------|--------|--------|---------|
+| File | Platform | Size | Reads | Mean Length | FastQC | RastQC 0.1.0 | Speedup |
+|------|----------|------|-------|-------------|--------|--------------|---------|
 | DRR242198 | ONT MinION | 406 MB | 76K | 5.3 kb | 14.6s | **3.1s** | 4.7x |
 | DRR723651 | PacBio Revio | 281 MB | 42K | 18.8 kb | 17.6s | **2.7s** | 6.5x |
 
 The `--long-read` flag enables 3 additional QC modules with negligible overhead.
 
+### Memory
+
+Peak resident memory no longer grows with `-t`. Measured on the 18.7M-read
+NextSeq run above, and on six 240 MB uncompressed FASTQs passed in one
+invocation:
+
+| Run | RastQC 0.1.0 | RastQC 0.2.0 |
+|-----|--------------|--------------|
+| 1 file (828 MB gz), `-t 4` | 322 MB / 20.9 s | **163 MB / 7.4 s** |
+| 1 file (828 MB gz), `-t 16` | 1119 MB / 22.3 s | **146 MB / 6.9 s** |
+| 6 files (240 MB each), `-t 8` | 4052 MB / 6.3 s | **546 MB / 1.6 s** |
+| 6 files (240 MB each), `-t 16` | 5148 MB / 7.0 s | **586 MB / 1.3 s** |
+
+0.1.0 got *slower* as `-t` rose past 4 while its memory kept climbing.
+
 ### Resource comparison
 
 | Metric | RastQC | FastQC (Java) |
 |--------|--------|---------------|
-| Binary size | 2.1 MB | ~215 MB (with JRE) |
+| Binary size | 2.6 MB | ~215 MB (with JRE) |
 | Startup time | <5 ms | ~2.5 s JVM warmup |
 | Peak memory (small files) | 49-50 MB | 424-425 MB |
-| Peak memory (1.4 GB file) | 315 MB | 434 MB |
-| Peak memory (long reads) | 670-1257 MB | 702-854 MB |
-| Threading | streaming intra-file + multi-file parallel | per-file parallel |
+| Threading | streaming intra-file + multi-file parallel, single `-t` budget | per-file parallel |
 | Modules | 12 core + 3 long-read | 11 |
 
-RastQC's streaming parallel pipeline automatically activates for files >50MB, using a bounded reader-worker architecture with adaptive batch sizing that scales with thread count without buffering the entire file in memory.
+### Reproducibility
+
+Output is byte-identical at any `-t`, and identical to a sequential run —
+verified across five datasets including two real NextSeq runs. Reports are
+also stable run to run: sorts that previously left tied rows in
+`HashMap` order now break ties deterministically.
 
 ---
 

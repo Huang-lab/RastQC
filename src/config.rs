@@ -34,7 +34,22 @@ pub struct FastQCConfig {
     pub kmer_size: usize,
     pub nofilter: bool,
     pub dup_length: usize,
+    /// How many distinct sequences the observation-table modules
+    /// (`DuplicationLevel`, `OverrepresentedSeqs`) may track before they stop
+    /// admitting new ones. Defaults to [`OBSERVATION_BUDGET`].
+    ///
+    /// Exposed on the config so tests can shrink it; production runs use the
+    /// full budget, because those modules run on a single instance that sees
+    /// every read (see `QCModule::wants_all_reads`).
+    pub observation_cutoff: usize,
+    /// Mirrors `--quiet`: suppresses informational notes from the processing
+    /// pipeline. Warnings and errors are still printed.
+    pub quiet: bool,
 }
+
+/// Distinct sequences an observation-table module tracks before it freezes.
+/// Matches FastQC's 100k limit.
+pub const OBSERVATION_BUDGET: usize = 100_000;
 
 const DEFAULT_ADAPTERS: &str = "\
 Illumina Universal Adapter\tAGATCGGAAGAG
@@ -101,6 +116,8 @@ impl FastQCConfig {
             kmer_size,
             nofilter,
             dup_length,
+            observation_cutoff: OBSERVATION_BUDGET,
+            quiet: false,
         })
     }
 

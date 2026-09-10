@@ -43,3 +43,24 @@ jobs:
 
       - name: Format check
         run: cargo fmt --all -- --check
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cargo.toml declared 1.70 while a dependency had already raised the
+      # real floor to 1.75, and nothing caught it. Build on exactly the
+      # declared version so the two can't drift again.
+      - name: Read declared MSRV
+        id: msrv
+        run: echo "version=$(grep '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Install declared MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - name: Check
+        run: cargo check --workspace --all-targets

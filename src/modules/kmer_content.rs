@@ -1,3 +1,4 @@
+use super::fasthash::FxBuildHasher;
 use super::{BaseGroup, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
@@ -9,12 +10,17 @@ const SAMPLING_RATE: u64 = 50; // process 1 in 50
 
 struct KmerInfo {
     count: u64,
-    positions: Vec<u64>,
+    /// Per-position occurrence counts. `u32` rather than `u64`: only one read
+    /// in `SAMPLING_RATE` is examined, so a single (kmer, position) counter
+    /// would need hundreds of billions of reads to overflow, and halving the
+    /// width halves what is the largest single allocation in a worker's
+    /// module state.
+    positions: Vec<u32>,
 }
 
 pub struct KmerContent {
     kmer_size: usize,
-    kmers: HashMap<Vec<u8>, KmerInfo>,
+    kmers: HashMap<Vec<u8>, KmerInfo, FxBuildHasher>,
     total_kmer_counts: Vec<u64>,
     total_sequences: u64,
     max_length: usize,
@@ -41,7 +47,7 @@ impl KmerContent {
     pub fn new(kmer_size: usize) -> Self {
         KmerContent {
             kmer_size,
-            kmers: HashMap::new(),
+            kmers: HashMap::default(),
             total_kmer_counts: Vec::new(),
             total_sequences: 0,
             max_length: 0,
@@ -61,6 +67,14 @@ impl QCModule for KmerContent {
 
     fn key(&self) -> &str {
         "kmer"
+    }
+
+    /// The 1-in-`SAMPLING_RATE` sampling below counts off `self.total_sequences`,
+    /// so it only means "every 50th read of the file" when this instance sees
+    /// the whole file in order. Per-worker instances each sampled their own
+    /// arrival order instead, which made the reported kmers depend on `-t`.
+    fn wants_all_reads(&self) -> bool {
+        true
     }
 
     fn process_sequence(&mut self, seq: &Sequence) {
@@ -101,15 +115,22 @@ impl QCModule for KmerContent {
 
             self.total_kmer_counts[i] += 1;
 
-            // Use Vec<u8> key directly — avoids String allocation per kmer
-            let entry = self.kmers.entry(kmer.to_vec()).or_insert_with(|| KmerInfo {
-                count: 0,
-                positions: Vec::new(),
-            });
+            // Look the kmer up by slice first. `HashMap::entry` needs an
+            // owned key, so going through it allocated a fresh `Vec` for
+            // every kmer *occurrence* — millions of allocations for a table
+            // that stops growing after the first few thousand reads. Only the
+            // insert path, taken once per distinct kmer, pays for a key.
+            let entry = match self.kmers.get_mut(kmer) {
+                Some(entry) => entry,
+                None => self.kmers.entry(kmer.to_vec()).or_insert(KmerInfo {
+                    count: 0,
+                    positions: Vec::new(),
+                }),
+            };
             entry.count += 1;
 
-            while entry.positions.len() <= i {
-                entry.positions.push(0);
+            if entry.positions.len() <= i {
+                entry.positions.resize(i + 1, 0);
             }
             entry.positions[i] += 1;
         }
@@ -151,7 +172,7 @@ impl QCModule for KmerContent {
 
                 for pos in group.start..=group.end {
                     if pos < info.positions.len() {
-                        obs += info.positions[pos];
+                        obs += info.positions[pos] as u64;
                     }
                     if pos < self.total_kmer_counts.len() {
                         total_in_group += self.total_kmer_counts[pos];
@@ -203,8 +224,19 @@ impl QCModule for KmerContent {
             }
         }
 
-        // Sort by p-value (most significant first)
-        results.sort_by(|a, b| b.pvalue_log10.partial_cmp(&a.pvalue_log10).unwrap());
+        // Sort by p-value (most significant first), breaking ties on the kmer
+        // itself. `results` is built by iterating a `HashMap`, whose order is
+        // randomized per process, so without a total ordering equally
+        // significant kmers came out in a different order on every run — and
+        // because the list is then truncated to 20, ties straddling the cutoff
+        // changed *which* kmers were reported at all. `partial_cmp` also can't
+        // be unwrapped blindly: a NaN p-value would panic.
+        results.sort_by(|a, b| {
+            b.pvalue_log10
+                .partial_cmp(&a.pvalue_log10)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.sequence.cmp(&b.sequence))
+        });
         results.truncate(20);
 
         self.min_pvalue_log10 = results.first().map(|r| r.pvalue_log10).unwrap_or(0.0);

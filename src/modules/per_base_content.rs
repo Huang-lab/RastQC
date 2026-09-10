@@ -3,11 +3,29 @@ use crate::config::FastQCConfig;
 use crate::io::Sequence;
 use std::any::Any;
 
+/// Base to counter slot: A/C/G/T take slots 0-3 and everything else (N and
+/// friends) lands in slot 4, which is accumulated but never reported.
+/// Table-driven so the hot loop stores unconditionally instead of running a
+/// chain of comparisons per base.
+const BASE_SLOT: [u8; 256] = {
+    let mut table = [4u8; 256];
+    table[b'A' as usize] = 0;
+    table[b'a' as usize] = 0;
+    table[b'C' as usize] = 1;
+    table[b'c' as usize] = 1;
+    table[b'G' as usize] = 2;
+    table[b'g' as usize] = 2;
+    table[b'T' as usize] = 3;
+    table[b't' as usize] = 3;
+    table
+};
+
 pub struct PerBaseContent {
-    a_counts: Vec<u64>,
-    t_counts: Vec<u64>,
-    g_counts: Vec<u64>,
-    c_counts: Vec<u64>,
+    /// Per-position base counts, `SLOTS` consecutive counters per position.
+    /// One flat array rather than four parallel `Vec`s: the hot loop touches
+    /// a single counter per base, and all counters for a position share a
+    /// cache line.
+    counts: Vec<u64>,
     // Results
     groups: Vec<BaseGroup>,
     a_pct: Vec<f64>,
@@ -20,10 +38,7 @@ pub struct PerBaseContent {
 impl PerBaseContent {
     pub fn new() -> Self {
         PerBaseContent {
-            a_counts: Vec::new(),
-            t_counts: Vec::new(),
-            g_counts: Vec::new(),
-            c_counts: Vec::new(),
+            counts: Vec::new(),
             groups: Vec::new(),
             a_pct: Vec::new(),
             t_pct: Vec::new(),
@@ -34,15 +49,23 @@ impl PerBaseContent {
     }
 
     const MAX_TRACKED_POSITIONS: usize = 1000;
+    /// Counters per position: A, C, G, T, other.
+    const SLOTS: usize = 5;
 
     fn ensure_length(&mut self, len: usize) {
-        let target = len.min(Self::MAX_TRACKED_POSITIONS);
-        while self.a_counts.len() < target {
-            self.a_counts.push(0);
-            self.t_counts.push(0);
-            self.g_counts.push(0);
-            self.c_counts.push(0);
+        let target = len.min(Self::MAX_TRACKED_POSITIONS) * Self::SLOTS;
+        if self.counts.len() < target {
+            self.counts.resize(target, 0);
         }
+    }
+
+    /// Number of positions currently tracked.
+    fn tracked_positions(&self) -> usize {
+        self.counts.len() / Self::SLOTS
+    }
+
+    fn count_at(&self, pos: usize, slot: usize) -> u64 {
+        self.counts[pos * Self::SLOTS + slot]
     }
 }
 
@@ -58,23 +81,21 @@ impl QCModule for PerBaseContent {
     fn process_sequence(&mut self, seq: &Sequence) {
         let len = seq.len().min(Self::MAX_TRACKED_POSITIONS);
         self.ensure_length(len);
+        // Slicing to exactly the tracked span lets the bounds check on the
+        // counter store fold away: slot is at most SLOTS - 1, so the largest
+        // index reached is len * SLOTS - 1.
+        let counts = &mut self.counts[..len * Self::SLOTS];
         for (i, &b) in seq.sequence[..len].iter().enumerate() {
-            match b {
-                b'A' | b'a' => self.a_counts[i] += 1,
-                b'T' | b't' => self.t_counts[i] += 1,
-                b'G' | b'g' => self.g_counts[i] += 1,
-                b'C' | b'c' => self.c_counts[i] += 1,
-                _ => {}
-            }
+            counts[i * Self::SLOTS + BASE_SLOT[b as usize] as usize] += 1;
         }
     }
 
     fn calculate_results(&mut self, config: &FastQCConfig) {
-        if self.a_counts.is_empty() {
+        if self.counts.is_empty() {
             return;
         }
 
-        self.groups = BaseGroup::make_groups(self.a_counts.len());
+        self.groups = BaseGroup::make_groups(self.tracked_positions());
 
         let warn = config.get_limit("sequence").map(|l| l.warn).unwrap_or(10.0);
         let error = config
@@ -90,11 +111,11 @@ impl QCModule for PerBaseContent {
             let mut g = 0u64;
             let mut c = 0u64;
             for pos in group.start..=group.end {
-                if pos < self.a_counts.len() {
-                    a += self.a_counts[pos];
-                    t += self.t_counts[pos];
-                    g += self.g_counts[pos];
-                    c += self.c_counts[pos];
+                if pos < self.tracked_positions() {
+                    a += self.count_at(pos, 0);
+                    c += self.count_at(pos, 1);
+                    g += self.count_at(pos, 2);
+                    t += self.count_at(pos, 3);
                 }
             }
             let total = (a + t + g + c) as f64;
@@ -278,17 +299,11 @@ impl QCModule for PerBaseContent {
 
     fn merge_from(&mut self, other: &mut dyn QCModule) {
         if let Some(other) = other.as_any_mut().downcast_mut::<Self>() {
-            while self.a_counts.len() < other.a_counts.len() {
-                self.a_counts.push(0);
-                self.t_counts.push(0);
-                self.g_counts.push(0);
-                self.c_counts.push(0);
+            if self.counts.len() < other.counts.len() {
+                self.counts.resize(other.counts.len(), 0);
             }
-            for i in 0..other.a_counts.len() {
-                self.a_counts[i] += other.a_counts[i];
-                self.t_counts[i] += other.t_counts[i];
-                self.g_counts[i] += other.g_counts[i];
-                self.c_counts[i] += other.c_counts[i];
+            for (dst, src) in self.counts.iter_mut().zip(other.counts.iter()) {
+                *dst += *src;
             }
         }
     }

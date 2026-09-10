@@ -40,7 +40,7 @@ pub struct FileTiming {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "rastqc", version = "0.1.0")]
+#[command(name = "rastqc", version)]
 #[command(about = "RastQC - A quality control tool for high throughput sequence data")]
 struct Cli {
     /// Input files (FASTQ, FASTA, BAM, SAM, Fast5, POD5). Use "-" to read
@@ -137,6 +137,22 @@ fn num_cpus() -> usize {
         .unwrap_or(1)
 }
 
+/// Split a total thread budget into (files analyzed at once, worker threads
+/// per file).
+///
+/// Whole files are the cheaper axis to parallelize over — they share nothing,
+/// so there is no reader thread to feed and no per-worker module state to
+/// merge afterwards. So spend the budget on concurrent files first and only
+/// widen each file's own pipeline with what is left over. The product stays
+/// at or below `threads`, which is what bounds both the thread count and the
+/// resident memory.
+fn split_thread_budget(threads: usize, num_files: usize) -> (usize, usize) {
+    let threads = threads.max(1);
+    let files_in_flight = num_files.clamp(1, threads);
+    let threads_per_file = (threads / files_in_flight).max(1);
+    (files_in_flight, threads_per_file)
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
@@ -190,6 +206,8 @@ fn run() -> Result<ExitCode> {
         cli.dup_length,
     )?;
 
+    config.quiet = cli.quiet;
+
     if long_read {
         config.enable_long_read_modules();
         if !cli.quiet {
@@ -197,8 +215,20 @@ fn run() -> Result<ExitCode> {
         }
     }
 
+    // `-t` is a budget for the whole run, not a per-file multiplier.
+    //
+    // Files are analyzed concurrently *and* each file's own pipeline runs a
+    // pool of worker threads, so handing `cli.threads` to both levels spawned
+    // up to threads x threads workers, each carrying a full set of module
+    // state. On a 16-core machine that turned `rastqc *.fastq.gz` into ~256
+    // workers and several GB of resident memory — while running slower than a
+    // fraction of the threads, since a single file saturates well before
+    // then. Splitting the budget keeps total workers at ~`cli.threads`
+    // regardless of how many files were passed.
+    let (files_in_flight, threads_per_file) = split_thread_budget(cli.threads, cli.files.len());
+
     rayon::ThreadPoolBuilder::new()
-        .num_threads(cli.threads)
+        .num_threads(files_in_flight)
         .build_global()
         .ok();
 
@@ -207,10 +237,11 @@ fn run() -> Result<ExitCode> {
 
     // Shared counter for progress
     let completed = AtomicUsize::new(0);
+    let failed = AtomicUsize::new(0);
     let summaries: Mutex<Vec<FileSummary>> = Mutex::new(Vec::new());
 
     cli.files.par_iter().for_each(|file| {
-        match process_file(file, &outdir, &config, &cli) {
+        match process_file(file, &outdir, &config, &cli, threads_per_file) {
             Ok(summary) => {
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 if !cli.quiet {
@@ -244,6 +275,7 @@ fn run() -> Result<ExitCode> {
             }
             Err(e) => {
                 completed.fetch_add(1, Ordering::Relaxed);
+                failed.fetch_add(1, Ordering::Relaxed);
                 eprintln!("Error processing {}: {}", file.display(), e);
             }
         }
@@ -288,6 +320,19 @@ fn run() -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    // A file that failed to process is an error, not a pass. Reporting
+    // success here meant an unreadable or malformed input slipped silently
+    // through a pipeline gate, which is exactly what `--exit-code` exists to
+    // prevent. 3 is the code `main` already uses for errors.
+    let failed = failed.load(Ordering::Relaxed);
+    if failed > 0 {
+        eprintln!(
+            "{} of {} file(s) could not be processed",
+            failed, total_files
+        );
+        return Ok(ExitCode::from(3));
+    }
+
     // Determine exit code based on QC results
     if cli.exit_code {
         let has_fail = summaries
@@ -312,6 +357,7 @@ fn process_file(
     outdir: &Path,
     config: &FastQCConfig,
     cli: &Cli,
+    threads_per_file: usize,
 ) -> Result<FileSummary> {
     let file_start = Instant::now();
     let is_stdin = file.as_os_str() == "-";
@@ -320,7 +366,7 @@ fn process_file(
     let qc_start = Instant::now();
     let (mut qc_modules, count) =
         if !is_stdin && !cli.no_parallel && parallel::should_use_parallel(file) {
-            parallel::process_file_parallel(file, config, cli.threads)?
+            parallel::process_file_parallel(file, config, threads_per_file)?
         } else {
             let mut reader = if is_stdin {
                 SequenceReader::from_stdin()
@@ -646,5 +692,47 @@ mod truncate_str_tests {
         assert_eq!(truncate_str(s, 0), "...");
         assert_eq!(truncate_str(s, 1), "...");
         assert_eq!(truncate_str(s, 2), "...");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_thread_budget;
+
+    #[test]
+    fn thread_budget_is_split_not_multiplied() {
+        // The product is what bounds both the thread count and the resident
+        // memory, so it must stay within the budget however many files are
+        // passed. Handing the full count to both levels was what turned
+        // `rastqc *.fastq.gz -t 16` into ~256 workers and multiple GB.
+        for threads in [1, 2, 4, 8, 16, 64] {
+            for num_files in [1, 2, 3, 6, 20, 500] {
+                let (files, per_file) = split_thread_budget(threads, num_files);
+                assert!(
+                    files * per_file <= threads,
+                    "threads={threads} files={num_files} produced {files}x{per_file}"
+                );
+                assert!(files >= 1 && per_file >= 1);
+                assert!(files <= num_files, "never more files in flight than exist");
+            }
+        }
+    }
+
+    #[test]
+    fn thread_budget_prefers_concurrent_files() {
+        // Whole files share nothing, so spend the budget there first.
+        assert_eq!(split_thread_budget(16, 16), (16, 1));
+        assert_eq!(split_thread_budget(16, 4), (4, 4));
+        assert_eq!(split_thread_budget(16, 1), (1, 16));
+        // More files than threads: run `threads` at a time, one worker each.
+        assert_eq!(split_thread_budget(4, 100), (4, 1));
+    }
+
+    #[test]
+    fn thread_budget_handles_degenerate_inputs() {
+        // `-t 0` and an empty file list must still yield a runnable pool.
+        assert_eq!(split_thread_budget(0, 1), (1, 1));
+        assert_eq!(split_thread_budget(1, 0), (1, 1));
+        assert_eq!(split_thread_budget(0, 0), (1, 1));
     }
 }

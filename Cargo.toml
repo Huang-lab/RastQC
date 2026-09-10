@@ -1,8 +1,8 @@
 [package]
 name = "rastqc"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.85"
 description = "RastQC - A fast quality control tool for high throughput sequence data, written in Rust"
 license = "MIT"
 repository = "https://github.com/Huang-lab/RastQC"
@@ -13,7 +13,12 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-flate2 = "1"
+# zlib-rs backend: a pure-Rust zlib port. flate2's default miniz_oxide
+# backend decodes this crate's own benchmark FASTQ ~2.6x slower than zlib,
+# and inflate runs on the single reader thread — so it, not the QC work, set
+# the floor on every gzipped input. Pure Rust keeps the single-static-binary
+# build (no cmake or C zlib needed, unlike the zlib-ng backend).
+flate2 = { version = "1.1.9", default-features = false, features = ["zlib-rs"] }
 bzip2 = "0.5"
 noodles = { version = "0.88", features = ["bam", "sam", "bgzf", "csi", "fastq"] }
 rayon = "1"
@@ -24,6 +29,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "fs"] }
 crossbeam = "0.8"
+memchr = "2"
+aho-corasick = "1"
 tiny_http = "0.12"
 open = "5"
 hdf5 = { version = "0.8", optional = true }

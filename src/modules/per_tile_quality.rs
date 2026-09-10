@@ -69,27 +69,16 @@ impl QCModule for PerTileQuality {
     }
 
     /// Sampling ("process all first 10000, then 10%") and the `max_tiles`
-    /// give-up cap below both key off `self.total_sequences`/`self.tile_data`,
-    /// which are per-instance state. On the sequential path there's only one
-    /// instance, so this is exactly "first 10000 reads of the file, then
-    /// every 10th". On the streaming-parallel path (`parallel.rs`), each
-    /// worker thread owns an independent `PerTileQuality` and only sees the
-    /// batches the reader happened to hand it — batch-to-worker assignment
-    /// is a race (first-idle-worker-wins on the channel), not a fixed split
-    /// of the file. So which specific reads get sampled (and which tiles get
-    /// "given up" on) can differ both between a sequential and a parallel run
-    /// of the same file, and between two separate parallel runs of the same
-    /// file (since the race can resolve differently run to run).
-    ///
-    /// In practice this mostly perturbs the exact tile-quality heatmap
-    /// values/`max_deviation` rather than flipping PASS/WARN/FAIL outright,
-    /// but it is a real source of non-reproducibility for this module
-    /// specifically. A proper fix would plumb a shared, globally-monotonic
-    /// read index into every worker (e.g. via the batch reader thread, which
-    /// already reads the file in true order) rather than each worker
-    /// counting its own local arrivals — that's a QCModule-trait-level
-    /// change out of scope here; see `KmerContent` for the same class of
-    /// tradeoff, made explicit there via its own sampling counter.
+    /// give-up cap below both key off `self.total_sequences`, which is
+    /// per-instance state — so "the first 10000 reads" only means the first
+    /// 10000 reads *of the file* if this instance sees the whole file in
+    /// order. `wants_all_reads` is what guarantees that; without it each
+    /// worker sampled its own arrival order, which is a race, and the
+    /// heatmap values shifted between runs and between `-t` settings.
+    fn wants_all_reads(&self) -> bool {
+        true
+    }
+
     fn process_sequence(&mut self, seq: &Sequence) {
         if self.gave_up {
             return;

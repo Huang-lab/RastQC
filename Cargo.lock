@@ -611,6 +611,7 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1213,8 +1214,9 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rastqc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "arrow",
  "base64",
@@ -1223,6 +1225,7 @@ dependencies = [
  "crossbeam",
  "flate2",
  "hdf5",
+ "memchr",
  "noodles",
  "open",
  "rayon",
@@ -1766,6 +1769,12 @@ dependencies = [
  "thiserror",
  "zopfli",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3be3d40e40a133f9c916ee3f9f4fa2d9d63435b5fbe1bfc6d9dae0aa0ada1513"
 
 [[package]]
 name = "zmij"

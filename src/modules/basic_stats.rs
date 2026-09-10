@@ -14,6 +14,10 @@ pub struct BasicStats {
     g_count: u64,
     c_count: u64,
     n_count: u64,
+    /// Count of every base value seen, folded into the A/T/G/C/N totals in
+    /// `calculate_results`. A flat 256-entry histogram means the hot loop is
+    /// one indexed increment per base instead of a five-way comparison chain.
+    base_hist: [u64; 256],
     lowest_char: u8,
     encoding: Option<PhredEncoding>,
     gc_percent: f64,
@@ -36,6 +40,7 @@ impl BasicStats {
             g_count: 0,
             c_count: 0,
             n_count: 0,
+            base_hist: [0; 256],
             lowest_char: 255,
             encoding: None,
             gc_percent: 0.0,
@@ -101,23 +106,30 @@ impl QCModule for BasicStats {
         self.total_bases += len as u64;
 
         for &b in &seq.sequence {
-            match b {
-                b'A' | b'a' => self.a_count += 1,
-                b'T' | b't' => self.t_count += 1,
-                b'G' | b'g' => self.g_count += 1,
-                b'C' | b'c' => self.c_count += 1,
-                _ => self.n_count += 1,
-            }
+            self.base_hist[b as usize] += 1;
         }
 
+        // Reduce into a local so this compiles to a branch-free vector min
+        // rather than a compare-and-store against the field on every byte.
+        let mut lowest = self.lowest_char;
         for &q in &seq.quality {
-            if q < self.lowest_char {
-                self.lowest_char = q;
-            }
+            lowest = lowest.min(q);
         }
+        self.lowest_char = lowest;
     }
 
     fn calculate_results(&mut self, _config: &FastQCConfig) {
+        // Fold the histogram into the reported totals. Assigned, not
+        // accumulated, so a second call can't double-count.
+        let count_of =
+            |bases: [u8; 2]| self.base_hist[bases[0] as usize] + self.base_hist[bases[1] as usize];
+        self.a_count = count_of(*b"Aa");
+        self.t_count = count_of(*b"Tt");
+        self.g_count = count_of(*b"Gg");
+        self.c_count = count_of(*b"Cc");
+        let acgt = self.a_count + self.t_count + self.g_count + self.c_count;
+        self.n_count = self.base_hist.iter().sum::<u64>() - acgt;
+
         if self.lowest_char < 255 {
             self.encoding = Some(PhredEncoding::detect(self.lowest_char));
         }
@@ -192,11 +204,11 @@ impl QCModule for BasicStats {
             self.min_length = self.min_length.min(other.min_length);
             self.max_length = self.max_length.max(other.max_length);
             self.total_bases += other.total_bases;
-            self.a_count += other.a_count;
-            self.t_count += other.t_count;
-            self.g_count += other.g_count;
-            self.c_count += other.c_count;
-            self.n_count += other.n_count;
+            // Only the histogram is merged; the A/T/G/C/N totals are derived
+            // from it in `calculate_results`, which runs after every merge.
+            for (dst, src) in self.base_hist.iter_mut().zip(other.base_hist.iter()) {
+                *dst += *src;
+            }
             self.lowest_char = self.lowest_char.min(other.lowest_char);
         }
     }
