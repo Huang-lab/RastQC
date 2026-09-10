@@ -449,6 +449,50 @@ fn test_nonexistent_file_error() {
     // Should print error but not crash
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Error") || stderr.contains("error") || stderr.contains("Cannot"));
+    // ...and must not report success. Exiting 0 after failing to process a
+    // file lets an unreadable input pass a pipeline gate silently.
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a file that could not be processed must not exit 0"
+    );
+}
+
+#[test]
+fn test_malformed_fastq_exits_nonzero_but_valid_input_exits_zero() {
+    let dir = std::env::temp_dir().join(format!("rastqc_exitcode_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+
+    let good = dir.join("good.fastq");
+    fs::write(&good, "@r1\nACGT\n+\nIIII\n@r2\nACGT\n+\nIIII\n").unwrap();
+    // Quality line shorter than the sequence: a corrupt record, not a
+    // record RastQC is allowed to quietly analyze.
+    let bad = dir.join("bad.fastq");
+    fs::write(&bad, "@r1\nACGT\n+\nII\n").unwrap();
+
+    let ok = Command::new(binary_path())
+        .args(["--quiet", "--nozip", "-o"])
+        .arg(&dir)
+        .arg(&good)
+        .output()
+        .expect("Failed to run");
+    assert_eq!(ok.status.code(), Some(0), "valid input should exit 0");
+
+    let err = Command::new(binary_path())
+        .args(["--quiet", "--nozip", "-o"])
+        .arg(&dir)
+        .arg(&bad)
+        .output()
+        .expect("Failed to run");
+    assert_eq!(
+        err.status.code(),
+        Some(3),
+        "malformed input should exit 3, got {:?}: {}",
+        err.status.code(),
+        String::from_utf8_lossy(&err.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]

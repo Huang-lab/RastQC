@@ -235,6 +235,7 @@ fn run() -> Result<ExitCode> {
 
     // Shared counter for progress
     let completed = AtomicUsize::new(0);
+    let failed = AtomicUsize::new(0);
     let summaries: Mutex<Vec<FileSummary>> = Mutex::new(Vec::new());
 
     cli.files.par_iter().for_each(|file| {
@@ -272,6 +273,7 @@ fn run() -> Result<ExitCode> {
             }
             Err(e) => {
                 completed.fetch_add(1, Ordering::Relaxed);
+                failed.fetch_add(1, Ordering::Relaxed);
                 eprintln!("Error processing {}: {}", file.display(), e);
             }
         }
@@ -314,6 +316,19 @@ fn run() -> Result<ExitCode> {
     if cli.serve {
         gui::start_server(&outdir, cli.port)?;
         return Ok(ExitCode::SUCCESS);
+    }
+
+    // A file that failed to process is an error, not a pass. Reporting
+    // success here meant an unreadable or malformed input slipped silently
+    // through a pipeline gate, which is exactly what `--exit-code` exists to
+    // prevent. 3 is the code `main` already uses for errors.
+    let failed = failed.load(Ordering::Relaxed);
+    if failed > 0 {
+        eprintln!(
+            "{} of {} file(s) could not be processed",
+            failed, total_files
+        );
+        return Ok(ExitCode::from(3));
     }
 
     // Determine exit code based on QC results

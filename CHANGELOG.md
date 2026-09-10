@@ -76,6 +76,13 @@ Both of these made a QC number depend on how the run was parallelized:
 - Kmer Content no longer panics on a NaN p-value.
 - `rastqc --version` read from a hardcoded string that could drift from the
   package version; it now reports the real one.
+- **A file that fails to process now exits non-zero (3).** RastQC printed
+  `Error processing <file>` and then exited 0, so an unreadable or malformed
+  input passed a Nextflow/Snakemake gate silently — the opposite of what
+  `--exit-code` is for.
+- The declared MSRV was 1.70 while a dependency already required 1.75. It is
+  now 1.75, and CI builds on exactly the declared version so the two can't
+  drift again.
 
 ### Added
 
