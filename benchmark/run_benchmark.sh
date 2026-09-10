@@ -2,8 +2,24 @@
 set -euo pipefail
 
 # ============================================================
-# RastQC Benchmark: Short-Read + Long-Read vs FastQC
+# RastQC benchmark: vs FastQC and Falco, short-read + long-read
 # ============================================================
+#
+# Measures wall time and peak resident memory for each tool on every FASTQ in
+# the data directory, repeating each measurement and reporting the median.
+#
+# FastQC and Falco are optional: whichever are found on PATH (or pointed at by
+# $FASTQC / $FALCO) are included, and the rest are skipped. Only RastQC is
+# required.
+#
+#   ./benchmark/run_benchmark.sh
+#   THREADS=4 REPS=5 ./benchmark/run_benchmark.sh
+#   DATADIR=/path/to/fastqs ./benchmark/run_benchmark.sh
+#
+# Note on threads: Falco is single-threaded (its -t flag is documented as "NOT
+# YET IMPLEMENTED"), and FastQC's -t parallelizes across files rather than
+# within one. So a single-file row compares one Falco core against $THREADS
+# RastQC cores; the "rastqc -t 1" row is there for a same-core comparison.
 
 # Resolve paths from this script's own location so the benchmark runs from any
 # checkout. Each may be overridden from the environment.
@@ -11,17 +27,38 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 RASTQC="${RASTQC:-$REPO_ROOT/target/release/rastqc}"
-FASTQC="${FASTQC:-fastqc}"
+FASTQC="${FASTQC:-$(command -v fastqc || true)}"
+FALCO="${FALCO:-$(command -v falco || true)}"
 DATADIR="${DATADIR:-$REPO_ROOT/benchmark/data}"
 RESULTSDIR="${RESULTSDIR:-$REPO_ROOT/benchmark/results}"
 THREADS="${THREADS:-4}"
+REPS="${REPS:-3}"
 
-mkdir -p "$RESULTSDIR/fastqc" "$RESULTSDIR/rastqc"
+if [ ! -x "$RASTQC" ]; then
+    echo "ERROR: rastqc binary not found at $RASTQC" >&2
+    echo "Build it first: cargo build --release" >&2
+    exit 1
+fi
+
+mkdir -p "$RESULTSDIR"/{fastqc,falco,rastqc}
+
+# ---- Portable peak-RSS measurement ----------------------------------------
+# BSD/macOS `time -l` reports "maximum resident set size" in bytes; GNU
+# `time -v` reports "Maximum resident set size (kbytes)" in KB.
+case "$(uname -s)" in
+    Darwin) TIME_FLAG="-l"; RSS_DIVISOR=1048576 ;;
+    *)      TIME_FLAG="-v"; RSS_DIVISOR=1024 ;;
+esac
+if ! /usr/bin/time $TIME_FLAG true >/dev/null 2>&1; then
+    echo "WARNING: /usr/bin/time $TIME_FLAG unavailable; memory will report as 0" >&2
+    TIME_FLAG=""
+fi
 
 # ---- Classify files ----
 SHORT_FILES=()
 LONG_FILES=()
-for f in "$DATADIR"/*.fastq.gz; do
+shopt -s nullglob
+for f in "$DATADIR"/*.fastq "$DATADIR"/*.fq "$DATADIR"/*.fastq.gz "$DATADIR"/*.fq.gz; do
     [ -f "$f" ] || continue
     fname=$(basename "$f")
     if [[ "$fname" == *_ont_* ]] || [[ "$fname" == *_pacbio_* ]]; then
@@ -30,172 +67,168 @@ for f in "$DATADIR"/*.fastq.gz; do
         SHORT_FILES+=("$f")
     fi
 done
+shopt -u nullglob
 
 TOTAL=$((${#SHORT_FILES[@]} + ${#LONG_FILES[@]}))
 if [ "$TOTAL" -eq 0 ]; then
-    echo "ERROR: No FASTQ files found in $DATADIR"
+    echo "ERROR: No FASTQ files found in $DATADIR" >&2
     exit 1
 fi
 
 echo "=============================================="
-echo "  RastQC Benchmark"
-echo "  Date: $(date)"
-echo "  Threads: $THREADS"
-echo "  Short-read files: ${#SHORT_FILES[@]}"
-echo "  Long-read files:  ${#LONG_FILES[@]}"
+echo "  RastQC benchmark"
+echo "  Date:    $(date)"
+echo "  Host:    $(uname -sm)"
+echo "  Threads: $THREADS   Repetitions: $REPS"
+echo "  RastQC:  $($RASTQC --version 2>&1 | head -1)"
+echo "  FastQC:  ${FASTQC:-(not found, skipped)}"
+echo "  Falco:   ${FALCO:-(not found, skipped)}"
+echo "  Files:   ${#SHORT_FILES[@]} short-read, ${#LONG_FILES[@]} long-read"
 echo "=============================================="
-echo ""
 
-# ---- CSV output ----
 CSV="$RESULTSDIR/benchmark_results.csv"
-echo "tool,file,type,size_mb,reads,real_sec,user_sec,sys_sec,max_rss_mb" > "$CSV"
+echo "tool,file,type,size_mb,reads,real_sec,max_rss_mb,reps" > "$CSV"
 
 # ---- Benchmark helper ----
+# bench <tool-label> <file-label> <type> -- <command...>
 bench() {
-    local tool="$1"
-    local label="$2"
-    local ftype="$3"
-    shift 3
+    local tool="$1" label="$2" ftype="$3"
+    shift 4  # drop the "--" separator too
     local cmd=("$@")
 
-    echo "  Running $tool..."
+    local walls=() rsss=()
+    for _ in $(seq 1 "$REPS"); do
+        local timefile
+        timefile=$(mktemp)
+        local start end
+        start=$(date +%s.%N 2>/dev/null || python3 -c 'import time;print(time.time())')
+        if [ -n "$TIME_FLAG" ]; then
+            /usr/bin/time $TIME_FLAG "${cmd[@]}" >/dev/null 2>"$timefile" || true
+        else
+            "${cmd[@]}" >/dev/null 2>"$timefile" || true
+        fi
+        end=$(date +%s.%N 2>/dev/null || python3 -c 'import time;print(time.time())')
 
-    local timefile=$(mktemp)
-    local start=$(python3 -c "import time; print(f'{time.time():.3f}')")
+        walls+=("$(awk -v s="$start" -v e="$end" 'BEGIN{printf "%.2f", e-s}')")
+        local rss_raw
+        rss_raw=$(grep -i "maximum resident set size" "$timefile" 2>/dev/null \
+                  | grep -oE '[0-9]+' | head -1 || true)
+        rsss+=("$(awk -v r="${rss_raw:-0}" -v d="$RSS_DIVISOR" 'BEGIN{printf "%.0f", r/d}')")
+        rm -f "$timefile"
+    done
 
-    /usr/bin/time -l "${cmd[@]}" > /dev/null 2> "$timefile"
-
-    local end=$(python3 -c "import time; print(f'{time.time():.3f}')")
-    local wall=$(python3 -c "print(f'{$end - $start:.2f}')")
-
-    local user_sec=$(grep "user" "$timefile" | head -1 | awk '{print $1}')
-    local sys_sec=$(grep "sys" "$timefile" | head -1 | awk '{print $1}')
-    local max_rss=$(grep "maximum resident set size" "$timefile" | awk '{print $1}')
-    local rss_mb=$((max_rss / 1048576))
-
-    echo "    Wall: ${wall}s | MaxRSS: ${rss_mb}MB"
+    local wall rss
+    wall=$(printf '%s\n' "${walls[@]}" | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}')
+    rss=$(printf '%s\n' "${rsss[@]}" | sort -n | awk 'END{print $1}')
 
     local size_mb=""
     if [ -f "$DATADIR/$label" ]; then
-        size_mb=$(( $(stat -f%z "$DATADIR/$label") / 1024 / 1024 ))
+        size_mb=$(awk -v b="$(wc -c < "$DATADIR/$label")" 'BEGIN{printf "%.0f", b/1048576}')
     fi
 
-    echo "$tool,$label,$ftype,$size_mb,,$wall,$user_sec,$sys_sec,$rss_mb" >> "$CSV"
-    rm -f "$timefile"
+    printf '  %-24s %8ss  %6s MB\n' "$tool" "$wall" "$rss"
+    echo "$tool,$label,$ftype,$size_mb,,$wall,$rss,$REPS" >> "$CSV"
 }
 
 # ---- Per-file benchmarks ----
 run_file() {
-    local f="$1"
-    local ftype="$2"
-    local fname=$(basename "$f")
+    local f="$1" ftype="$2"
+    local fname
+    fname=$(basename "$f")
 
     echo ""
     echo "=== $fname ($ftype) ==="
 
-    # Count reads
-    echo "  Counting reads..."
-    local nreads=$(gzip -dc "$f" 2>/dev/null | wc -l | awk '{print int($1/4)}')
-    echo "  Reads: $nreads"
+    local nreads
+    case "$fname" in
+        *.gz) nreads=$(gzip -dc "$f" | wc -l | awk '{print int($1/4)}') ;;
+        *)    nreads=$(wc -l < "$f" | awk '{print int($1/4)}') ;;
+    esac
+    echo "  reads: $nreads"
 
-    # FastQC
-    bench "fastqc" "$fname" "$ftype" "$FASTQC" -t "$THREADS" -o "$RESULTSDIR/fastqc" --quiet "$f"
+    [ -n "$FASTQC" ] && bench "fastqc" "$fname" "$ftype" -- \
+        "$FASTQC" -t "$THREADS" -o "$RESULTSDIR/fastqc" --quiet "$f"
+    [ -n "$FALCO" ] && bench "falco" "$fname" "$ftype" -- \
+        "$FALCO" -o "$RESULTSDIR/falco" "$f"
 
-    # RastQC (short-read mode)
-    bench "rastqc" "$fname" "$ftype" "$RASTQC" -t "$THREADS" -o "$RESULTSDIR/rastqc" -q --time "$f"
+    bench "rastqc -t 1" "$fname" "$ftype" -- \
+        "$RASTQC" -t 1 -o "$RESULTSDIR/rastqc" -q "$f"
+    bench "rastqc -t $THREADS" "$fname" "$ftype" -- \
+        "$RASTQC" -t "$THREADS" -o "$RESULTSDIR/rastqc" -q "$f"
 
-    # RastQC with --long-read (only for long-read files)
     if [ "$ftype" = "long" ]; then
-        bench "rastqc_lr" "$fname" "$ftype" "$RASTQC" --long-read -t "$THREADS" -o "$RESULTSDIR/rastqc" -q --time "$f"
+        bench "rastqc --long-read" "$fname" "$ftype" -- \
+            "$RASTQC" --long-read -t "$THREADS" -o "$RESULTSDIR/rastqc" -q "$f"
     fi
 
-    # Patch reads count into CSV
-    sed -i '' "s/,$fname,$ftype,[^,]*,,/,$fname,$ftype,$(( $(stat -f%z "$f") / 1024 / 1024 )),$nreads,/g" "$CSV"
+    # Patch the read count in for every row of this file.
+    local size_mb
+    size_mb=$(awk -v b="$(wc -c < "$f")" 'BEGIN{printf "%.0f", b/1048576}')
+    awk -F, -v OFS=, -v fn="$fname" -v n="$nreads" -v sz="$size_mb" \
+        '$2==fn { $4=sz; $5=n } { print }' "$CSV" > "$CSV.tmp" && mv "$CSV.tmp" "$CSV"
 }
 
-# Short-read files
 if [ ${#SHORT_FILES[@]} -gt 0 ]; then
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  SHORT-READ BENCHMARKS"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    for f in "${SHORT_FILES[@]}"; do
-        run_file "$f" "short"
-    done
+    echo "━━━ SHORT-READ BENCHMARKS ━━━"
+    for f in "${SHORT_FILES[@]}"; do run_file "$f" "short"; done
 
-    # All short-read files together
-    echo ""
-    echo "=== ALL SHORT-READ FILES TOGETHER ==="
-    bench "fastqc" "ALL_SHORT" "short" "$FASTQC" -t "$THREADS" -o "$RESULTSDIR/fastqc" --quiet "${SHORT_FILES[@]}"
-    bench "rastqc" "ALL_SHORT" "short" "$RASTQC" -t "$THREADS" -o "$RESULTSDIR/rastqc" -q --time "${SHORT_FILES[@]}"
+    if [ ${#SHORT_FILES[@]} -gt 1 ]; then
+        echo ""
+        echo "=== ALL SHORT-READ FILES TOGETHER ==="
+        [ -n "$FASTQC" ] && bench "fastqc" "ALL_SHORT" "short" -- \
+            "$FASTQC" -t "$THREADS" -o "$RESULTSDIR/fastqc" --quiet "${SHORT_FILES[@]}"
+        [ -n "$FALCO" ] && bench "falco" "ALL_SHORT" "short" -- \
+            "$FALCO" -o "$RESULTSDIR/falco" "${SHORT_FILES[@]}"
+        bench "rastqc -t $THREADS" "ALL_SHORT" "short" -- \
+            "$RASTQC" -t "$THREADS" -o "$RESULTSDIR/rastqc" -q "${SHORT_FILES[@]}"
+    fi
 fi
 
-# Long-read files
 if [ ${#LONG_FILES[@]} -gt 0 ]; then
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  LONG-READ BENCHMARKS"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    for f in "${LONG_FILES[@]}"; do
-        run_file "$f" "long"
-    done
+    echo "━━━ LONG-READ BENCHMARKS ━━━"
+    for f in "${LONG_FILES[@]}"; do run_file "$f" "long"; done
 fi
 
 echo ""
 echo "=============================================="
-echo "  Results saved to: $CSV"
+echo "  Results: $CSV"
 echo "=============================================="
 
 # ---- Summary ----
 CSV="$CSV" python3 << 'PYEOF'
-import csv
-import os
+import csv, os, collections
 
-results = {}
-with open(os.environ["CSV"]) as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        key = row["file"]
-        tool = row["tool"]
-        if key not in results:
-            results[key] = {"type": row.get("type", ""), "reads": row.get("reads", "")}
-        results[key][tool] = {
+rows = collections.defaultdict(dict)
+meta = {}
+with open(os.environ["CSV"]) as fh:
+    for row in csv.DictReader(fh):
+        rows[row["file"]][row["tool"]] = {
             "wall": float(row["real_sec"]),
-            "size": row.get("size_mb", ""),
-            "rss": row.get("max_rss_mb", ""),
+            "rss": row["max_rss_mb"],
         }
+        meta[row["file"]] = (row["type"], row["size_mb"], row["reads"])
 
-# Short-read table
-print()
-print("━━━ SHORT-READ RESULTS ━━━")
-print(f"{'File':<30} {'Size':>6} {'Reads':>10} {'FastQC':>9} {'RastQC':>9} {'Speedup':>8} {'FQC RSS':>8} {'RQC RSS':>8}")
-print("─" * 95)
-for fname, d in results.items():
-    if d["type"] != "short" or "fastqc" not in d or "rastqc" not in d:
+ref_tools = ["fastqc", "falco"]
+for ftype, heading in (("short", "SHORT-READ RESULTS"), ("long", "LONG-READ RESULTS")):
+    entries = {f: d for f, d in rows.items() if meta[f][0] == ftype}
+    if not entries:
         continue
-    fqc = d["fastqc"]["wall"]
-    rqc = d["rastqc"]["wall"]
-    speedup = fqc / rqc if rqc > 0 else 0
-    size = d.get("fastqc", d.get("rastqc", {})).get("size", "")
-    reads = d.get("reads", "")
-    fmem = d["fastqc"].get("rss", "")
-    rmem = d["rastqc"].get("rss", "")
-    print(f"{fname:<30} {size:>5}M {reads:>10} {fqc:>8.2f}s {rqc:>8.2f}s {speedup:>7.1f}x {fmem:>7}M {rmem:>7}M")
-
-# Long-read table
-long_entries = {k: v for k, v in results.items() if v["type"] == "long" and "fastqc" in v}
-if long_entries:
     print()
-    print("━━━ LONG-READ RESULTS ━━━")
-    print(f"{'File':<35} {'Size':>6} {'Reads':>8} {'FastQC':>9} {'RastQC':>9} {'RQC+LR':>9} {'Speedup':>8}")
-    print("─" * 95)
-    for fname, d in long_entries.items():
-        fqc = d["fastqc"]["wall"]
-        rqc = d["rastqc"]["wall"]
-        rqc_lr = d.get("rastqc_lr", {}).get("wall", 0)
-        speedup = fqc / rqc if rqc > 0 else 0
-        size = d.get("fastqc", d.get("rastqc", {})).get("size", "")
-        reads = d.get("reads", "")
-        lr_str = f"{rqc_lr:>8.2f}s" if rqc_lr > 0 else "       -"
-        print(f"{fname:<35} {size:>5}M {reads:>8} {fqc:>8.2f}s {rqc:>8.2f}s {lr_str} {speedup:>7.1f}x")
+    print(f"━━━ {heading} ━━━")
+    for fname, tools in entries.items():
+        _, size, reads = meta[fname]
+        print(f"\n{fname}  ({size} MB, {reads} reads)")
+        print(f"  {'tool':<22} {'wall':>9} {'peak RSS':>10}  {'vs fastqc':>10} {'vs falco':>9}")
+        print("  " + "─" * 66)
+        for tool, m in tools.items():
+            cmp = []
+            for ref in ref_tools:
+                if ref in tools and tool != ref and m["wall"] > 0:
+                    cmp.append(f"{tools[ref]['wall'] / m['wall']:.1f}x")
+                else:
+                    cmp.append("-")
+            print(f"  {tool:<22} {m['wall']:>8.2f}s {m['rss']:>8} MB  "
+                  f"{cmp[0]:>10} {cmp[1]:>9}")
 PYEOF

@@ -1,8 +1,9 @@
 mod bam;
+pub mod block;
 pub mod colorspace;
 mod fast5;
 mod fasta;
-mod fastq;
+pub(crate) mod fastq;
 mod pod5;
 
 use anyhow::{bail, Result};
@@ -170,6 +171,31 @@ pub struct Sequence {
 }
 
 impl Sequence {
+    /// An empty record, to be filled by [`Sequence::refill`].
+    pub(crate) fn empty() -> Self {
+        Sequence {
+            header: String::new(),
+            sequence: Vec::new(),
+            quality: Vec::new(),
+            filtered: false,
+        }
+    }
+
+    /// Overwrite this record in place from borrowed slices.
+    ///
+    /// Reusing one `Sequence` across a block keeps the parallel workers' hot
+    /// loop allocation-free: the three buffers keep the capacity they reached
+    /// on earlier records instead of being freshly allocated per read.
+    pub(crate) fn refill(&mut self, header: &str, sequence: &[u8], quality: &[u8]) {
+        self.header.clear();
+        self.header.push_str(header);
+        self.sequence.clear();
+        self.sequence.extend_from_slice(sequence);
+        self.quality.clear();
+        self.quality.extend_from_slice(quality);
+        self.filtered = self.header.contains(":Y:");
+    }
+
     pub fn len(&self) -> usize {
         self.sequence.len()
     }

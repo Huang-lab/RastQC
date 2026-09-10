@@ -1,6 +1,7 @@
 pub mod adapter_content;
 pub mod basic_stats;
 pub mod duplication;
+mod fasthash;
 pub mod kmer_content;
 pub mod long_read_quality;
 pub mod n_content;
@@ -65,6 +66,25 @@ pub trait QCModule: Send {
     /// requires seeing every read; every other module gets skipped for a
     /// filter-failed read unless `--nofilter` is set. See `--nofilter`.
     fn wants_filtered_reads(&self) -> bool {
+        false
+    }
+
+    /// Whether this module's result depends on seeing the file's *entire*
+    /// read stream in one instance, rather than being reconstructible by
+    /// merging per-worker partial states.
+    ///
+    /// True for the modules that keep a capped observation table
+    /// (`DuplicationLevel`, `OverrepresentedSeqs`). Merging their partial
+    /// states is exact only while the cap is unreached; once a worker freezes
+    /// its table, occurrences of a sequence it never admitted are lost, and
+    /// each worker freezes on a different subset. That made a headline QC
+    /// number depend on `-t`: one real NextSeq run reported 75.2% duplicate
+    /// at `-t 1` (matching FastQC) but 82.7% at `-t 4`.
+    ///
+    /// The parallel pipeline runs these on a single instance fed every block
+    /// in file order, so their results match a sequential run exactly and
+    /// their memory no longer scales with the worker count.
+    fn wants_all_reads(&self) -> bool {
         false
     }
 
@@ -355,11 +375,13 @@ impl ModuleFactory {
         if !config.is_ignored("duplication") {
             modules.push(Box::new(duplication::DuplicationLevel::new(
                 config.dup_length,
+                config.observation_cutoff,
             )));
         }
         if !config.is_ignored("overrepresented") {
             modules.push(Box::new(overrepresented::OverrepresentedSeqs::new(
                 config.dup_length,
+                config.observation_cutoff,
             )));
         }
         if !config.is_ignored("adapter") {

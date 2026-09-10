@@ -1,3 +1,4 @@
+use super::fasthash::FxBuildHasher;
 use super::{format_pct_label, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
@@ -16,7 +17,7 @@ use std::collections::HashMap;
 /// for extremely diverse/large inputs; see the identical caveat on
 /// `KmerContent`'s sampling for the same class of intra-file-parallelism
 /// tradeoff.
-const OBSERVATION_CUTOFF: usize = 100_000;
+use crate::config::OBSERVATION_BUDGET;
 
 /// Duplication level bin labels matching FastQC (16 bins, 0-indexed).
 /// Slot 9 covers counts 10+ (up to 50), so its label is ">10" not "10".
@@ -26,10 +27,13 @@ const BIN_LABELS: &[&str] = &[
 
 pub struct DuplicationLevel {
     /// Uppercase sequence bytes -> count (avoids String allocation per read)
-    sequences: HashMap<Vec<u8>, u64>,
+    sequences: HashMap<Vec<u8>, u64, FxBuildHasher>,
     total_sequences: u64,
     count_at_unique_limit: u64,
     dup_length: usize,
+    /// This instance's share of [`OBSERVATION_BUDGET`]; see
+    /// `FastQCConfig::observation_cutoff`.
+    observation_cutoff: usize,
     frozen: bool,
     unique_count: usize,
     /// Reusable buffer for uppercase conversion
@@ -42,12 +46,13 @@ pub struct DuplicationLevel {
 }
 
 impl DuplicationLevel {
-    pub fn new(dup_length: usize) -> Self {
+    pub fn new(dup_length: usize, observation_cutoff: usize) -> Self {
         DuplicationLevel {
-            sequences: HashMap::new(),
+            sequences: HashMap::default(),
             total_sequences: 0,
             count_at_unique_limit: 0,
             dup_length,
+            observation_cutoff,
             frozen: false,
             unique_count: 0,
             upper_buf: Vec::with_capacity(dup_length),
@@ -137,6 +142,10 @@ impl QCModule for DuplicationLevel {
         "duplication"
     }
 
+    fn wants_all_reads(&self) -> bool {
+        true
+    }
+
     fn process_sequence(&mut self, seq: &Sequence) {
         self.total_sequences += 1;
 
@@ -170,7 +179,7 @@ impl QCModule for DuplicationLevel {
         }
         self.count_at_unique_limit = self.total_sequences;
 
-        if self.unique_count >= OBSERVATION_CUTOFF {
+        if self.unique_count >= self.observation_cutoff {
             self.frozen = true;
         }
     }
@@ -376,7 +385,10 @@ impl QCModule for DuplicationLevel {
             self.total_sequences += other.total_sequences;
             self.count_at_unique_limit += other.count_at_unique_limit;
             self.unique_count = self.sequences.len();
-            self.frozen = self.unique_count >= OBSERVATION_CUTOFF;
+            // The merged table stands for the whole file, so it is the
+            // whole-file budget that decides whether tracking is frozen —
+            // not the per-worker share each instance was built with.
+            self.frozen = self.unique_count >= OBSERVATION_BUDGET;
         }
     }
 
@@ -403,7 +415,7 @@ mod tests {
         // Regression test for the clone-avoidance refactor in
         // process_sequence: a sequence seen many times must still increment
         // the same HashMap entry every time, not just on first sight.
-        let mut m = DuplicationLevel::new(50);
+        let mut m = DuplicationLevel::new(50, OBSERVATION_BUDGET);
         for _ in 0..5 {
             m.process_sequence(&seq(b"ACGTACGTACGT"));
         }
@@ -421,7 +433,7 @@ mod tests {
         // Lowercase and uppercase forms of the same sequence must land in
         // the same bucket (the get_mut-then-insert refactor must not bypass
         // the existing to_ascii_uppercase() normalization).
-        let mut m = DuplicationLevel::new(50);
+        let mut m = DuplicationLevel::new(50, OBSERVATION_BUDGET);
         m.process_sequence(&seq(b"acgtACGT"));
         m.process_sequence(&seq(b"ACGTacgt"));
 

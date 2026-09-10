@@ -17,6 +17,34 @@ enum StreamKind {
     Plain,
 }
 
+/// Open `path` and wrap it in the decompressor its extension implies.
+///
+/// Shared by the per-record reader and the block reader so both infer
+/// compression the same way.
+///
+/// `MultiGzDecoder` (not `GzDecoder`) is required so that multi-member gzip
+/// streams are fully decoded. Large FASTQs compressed with pigz/bgzip (or any
+/// chunked gzip) are concatenations of many gzip members; `GzDecoder` stops
+/// silently after the first member, which truncated large inputs to ~20k
+/// reads. See issue #3.
+pub(crate) fn open_decompressed(path: &Path) -> Result<Box<dyn Read + Send>> {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+
+    let file = File::open(path).with_context(|| format!("Cannot open file: {}", path.display()))?;
+
+    Ok(if name.ends_with(".gz") {
+        Box::new(MultiGzDecoder::new(file))
+    } else if name.ends_with(".bz2") {
+        Box::new(BzDecoder::new(file))
+    } else {
+        Box::new(file)
+    })
+}
+
 pub struct FastqReader {
     reader: Box<dyn BufRead>,
     colorspace_detected: Option<bool>,
@@ -28,27 +56,7 @@ pub struct FastqReader {
 impl FastqReader {
     /// Open a FASTQ file (optionally compressed with gzip or bzip2).
     pub fn open(path: &Path) -> Result<Self> {
-        let name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_lowercase();
-
-        let file =
-            File::open(path).with_context(|| format!("Cannot open file: {}", path.display()))?;
-
-        let reader: Box<dyn Read> = if name.ends_with(".gz") {
-            // MultiGzDecoder (not GzDecoder) is required so that multi-member
-            // gzip streams are fully decoded. Large FASTQs compressed with
-            // pigz/bgzip (or any chunked gzip) are concatenations of many gzip
-            // members; GzDecoder stops silently after the first member, which
-            // truncated large inputs to ~20k reads. See issue #3.
-            Box::new(MultiGzDecoder::new(file))
-        } else if name.ends_with(".bz2") {
-            Box::new(BzDecoder::new(file))
-        } else {
-            Box::new(file)
-        };
+        let reader = open_decompressed(path)?;
 
         Ok(FastqReader {
             reader: Box::new(BufReader::with_capacity(1024 * 1024, reader)),

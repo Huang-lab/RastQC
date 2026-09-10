@@ -1,20 +1,17 @@
+use super::fasthash::FxBuildHasher;
 use super::{QCModule, QCResult};
-use crate::config::FastQCConfig;
+use crate::config::{FastQCConfig, OBSERVATION_BUDGET};
 use crate::io::Sequence;
 use std::any::Any;
 use std::collections::HashMap;
 
-/// Cap on distinct sequences tracked before "freezing" (matching FastQC's own
-/// bounded-memory approach). As with `DuplicationLevel`, this cap is
-/// per-worker on the streaming-parallel path, so exactly when tracking
-/// freezes (and thus `count_at_limit`) can differ between a sequential and
-/// a parallel run of the same file. Rarely reached in practice.
-const OBSERVATION_CUTOFF: usize = 100_000;
-
 pub struct OverrepresentedSeqs {
-    sequences: HashMap<Vec<u8>, u64>,
+    sequences: HashMap<Vec<u8>, u64, FxBuildHasher>,
     total_count: u64,
     dup_length: usize,
+    /// This instance's share of [`crate::config::OBSERVATION_BUDGET`]; see
+    /// `FastQCConfig::observation_cutoff`.
+    observation_cutoff: usize,
     reached_limit: bool,
     count_at_limit: u64,
     /// Reusable buffer for uppercase conversion
@@ -32,11 +29,12 @@ pub struct OverrepEntry {
 }
 
 impl OverrepresentedSeqs {
-    pub fn new(dup_length: usize) -> Self {
+    pub fn new(dup_length: usize, observation_cutoff: usize) -> Self {
         OverrepresentedSeqs {
-            sequences: HashMap::new(),
+            sequences: HashMap::default(),
             total_count: 0,
             dup_length,
+            observation_cutoff,
             reached_limit: false,
             count_at_limit: 0,
             upper_buf: Vec::with_capacity(dup_length),
@@ -145,6 +143,10 @@ impl QCModule for OverrepresentedSeqs {
         "overrepresented"
     }
 
+    fn wants_all_reads(&self) -> bool {
+        true
+    }
+
     fn process_sequence(&mut self, seq: &Sequence) {
         self.total_count += 1;
 
@@ -172,7 +174,7 @@ impl QCModule for OverrepresentedSeqs {
             }
         }
 
-        if self.sequences.len() >= OBSERVATION_CUTOFF {
+        if self.sequences.len() >= self.observation_cutoff {
             self.reached_limit = true;
             self.count_at_limit = self.total_count;
         }
@@ -206,7 +208,10 @@ impl QCModule for OverrepresentedSeqs {
             })
             .collect();
 
-        entries.sort_by(|a, b| b.1.cmp(a.1));
+        // Highest count first, ties broken on the sequence itself: `entries`
+        // comes from iterating a `HashMap`, so equally abundant sequences
+        // would otherwise be reported in a different order on every run.
+        entries.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
 
         self.qc_result = QCResult::Pass;
 
@@ -270,7 +275,10 @@ impl QCModule for OverrepresentedSeqs {
             }
             self.total_count += other.total_count;
             self.count_at_limit += other.count_at_limit;
-            self.reached_limit = self.sequences.len() >= OBSERVATION_CUTOFF;
+            // The merged table stands for the whole file, so it is the
+            // whole-file budget that decides whether tracking is frozen —
+            // not the per-worker share each instance was built with.
+            self.reached_limit = self.sequences.len() >= OBSERVATION_BUDGET;
         }
     }
 
@@ -297,7 +305,7 @@ mod tests {
         // Regression test for the clone-avoidance refactor in
         // process_sequence: a sequence seen many times must still increment
         // the same HashMap entry every time, not just on first sight.
-        let mut m = OverrepresentedSeqs::new(50);
+        let mut m = OverrepresentedSeqs::new(50, OBSERVATION_BUDGET);
         for _ in 0..5 {
             m.process_sequence(&seq(b"ACGTACGTACGT"));
         }
@@ -310,7 +318,7 @@ mod tests {
 
     #[test]
     fn overrepresented_sequence_is_flagged_above_threshold() {
-        let mut m = OverrepresentedSeqs::new(50);
+        let mut m = OverrepresentedSeqs::new(50, OBSERVATION_BUDGET);
         for _ in 0..10 {
             m.process_sequence(&seq(b"ACGTACGTACGT"));
         }

@@ -2,6 +2,7 @@ use super::{format_pct_label, BaseGroup, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
 use crate::report::html_escape;
+use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use std::any::Any;
 
 struct AdapterTracker {
@@ -12,6 +13,19 @@ struct AdapterTracker {
 
 pub struct AdapterContent {
     adapters: Vec<AdapterTracker>,
+    /// All adapters in one Aho-Corasick automaton, used purely to answer
+    /// "does this read contain any adapter at all?" in a single SIMD-
+    /// accelerated pass. Almost every read in a typical library contains
+    /// none, and that pass replaces what was a brute-force scan of every
+    /// start position for every adapter — which profiling showed to be over
+    /// half of all CPU time spent on QC.
+    ///
+    /// `None` when there are no (non-empty) adapters to look for.
+    matcher: Option<AhoCorasick>,
+    /// Start of each adapter's first match in the current read, `usize::MAX`
+    /// for "not present". Kept as a field so the rare read that does contain
+    /// an adapter doesn't allocate.
+    first_match: Vec<usize>,
     total_count: u64,
     max_length: usize,
     // Results
@@ -24,7 +38,7 @@ pub struct AdapterContent {
 
 impl AdapterContent {
     pub fn new(config: &FastQCConfig) -> Self {
-        let adapters = config
+        let adapters: Vec<AdapterTracker> = config
             .adapters
             .iter()
             .map(|a| AdapterTracker {
@@ -34,8 +48,35 @@ impl AdapterContent {
             })
             .collect();
 
+        // An empty adapter sequence would match at every position, which is
+        // meaningless output; such an entry is a malformed adapter-list line,
+        // so it simply never matches. Pattern indices still line up with
+        // `adapters` because empty entries are replaced, not dropped.
+        let patterns: Vec<&[u8]> = adapters
+            .iter()
+            .map(|a| {
+                if a.sequence.is_empty() {
+                    &b"\0"[..]
+                } else {
+                    a.sequence.as_slice()
+                }
+            })
+            .collect();
+        let matcher = if patterns.is_empty() {
+            None
+        } else {
+            // Case-insensitive so a lowercase read (or adapter list) still
+            // matches, as the byte-wise comparison it replaces did.
+            AhoCorasickBuilder::new()
+                .ascii_case_insensitive(true)
+                .build(&patterns)
+                .ok()
+        };
+
         AdapterContent {
+            first_match: Vec::with_capacity(adapters.len()),
             adapters,
+            matcher,
             total_count: 0,
             max_length: 0,
             groups: Vec::new(),
@@ -71,35 +112,48 @@ impl QCModule for AdapterContent {
             self.max_length = seq_len;
         }
 
-        for adapter in &mut self.adapters {
-            Self::ensure_length(&mut adapter.positions, seq_len);
+        // Split the borrows so the adapter trackers and the scratch buffer can
+        // be touched alongside the shared matcher.
+        let Self {
+            adapters,
+            matcher,
+            first_match,
+            ..
+        } = self;
 
-            let adapter_len = adapter.sequence.len();
-            if seq_len < adapter_len {
+        for adapter in adapters.iter_mut() {
+            Self::ensure_length(&mut adapter.positions, seq_len);
+        }
+
+        let window = &seq.sequence[..seq_len];
+        let Some(matcher) = matcher.as_ref() else {
+            return;
+        };
+        // One pass settles the common case: no adapter anywhere in this read.
+        if matcher.find(window).is_none() {
+            return;
+        }
+
+        // This read does contain at least one adapter, so locate where each
+        // one first occurs. Overlapping iteration matters here: FastQC
+        // searches for every adapter independently, so an adapter starting
+        // inside another adapter's match must still be found.
+        first_match.clear();
+        first_match.resize(adapters.len(), usize::MAX);
+        for m in matcher.find_overlapping_iter(window) {
+            let slot = &mut first_match[m.pattern().as_usize()];
+            if *slot == usize::MAX {
+                *slot = m.start();
+            }
+        }
+
+        // Once an adapter appears, every base from that point on is inside it.
+        for (adapter, &pos) in adapters.iter_mut().zip(first_match.iter()) {
+            if pos == usize::MAX {
                 continue;
             }
-
-            // Case-insensitive search without allocating an uppercase copy
-            let mut found_pos = None;
-            for start in 0..=(seq_len - adapter_len) {
-                let mut matches = true;
-                for j in 0..adapter_len {
-                    if seq.sequence[start + j].to_ascii_uppercase() != adapter.sequence[j] {
-                        matches = false;
-                        break;
-                    }
-                }
-                if matches {
-                    found_pos = Some(start);
-                    break;
-                }
-            }
-
-            // If found, increment all positions from match point onwards
-            if let Some(pos) = found_pos {
-                for i in pos..seq_len {
-                    adapter.positions[i] += 1;
-                }
+            for count in &mut adapter.positions[pos..seq_len] {
+                *count += 1;
             }
         }
     }

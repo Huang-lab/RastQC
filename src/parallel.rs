@@ -1,13 +1,17 @@
 use crate::config::FastQCConfig;
+use crate::io::block::{self, BlockParseError, FastqBlockReader, RecordIter, BLOCK_SIZE};
+use crate::io::fastq;
 use crate::io::{Sequence, SequenceReader};
 use crate::modules::{merge_module_sets, should_process, ModuleFactory, QCModule};
 use anyhow::Result;
 use crossbeam::channel;
 use std::path::Path;
+use std::sync::Arc;
 use std::thread;
 
-/// Target bytes per batch (~4MB). Batch size is computed dynamically
-/// from the first few reads' average length so long reads don't blow up memory.
+/// Target bytes per batch (~4MB) on the generic record-at-a-time path. Batch
+/// size is computed dynamically from the first few reads' average length so
+/// long reads don't blow up memory.
 const TARGET_BATCH_BYTES: usize = 4 * 1024 * 1024;
 
 /// Fallback batch size when read lengths are unknown.
@@ -18,21 +22,242 @@ const CHANNEL_CAPACITY: usize = 2;
 
 /// Process a file using streaming parallelism.
 ///
-/// Architecture:
-///   Reader thread → bounded channel → N worker threads (each with own modules)
-///   → merge all worker module states → final result
+/// Plain FASTQ (optionally gzip/bzip2 compressed) takes the block fast path,
+/// where the reader thread only decompresses and cuts the stream at record
+/// boundaries and the workers do the parsing. Every other input format — BAM,
+/// SAM, FASTA, Fast5, POD5, and SOLiD colorspace FASTQ — goes through the
+/// generic path, whose reader thread produces owned `Sequence` records one at
+/// a time.
 ///
-/// Unlike the old approach, this never buffers the entire file in memory.
-/// Memory usage is bounded: O(BATCH_SIZE × CHANNEL_CAPACITY × avg_read_size).
+/// Neither path ever buffers the whole file: memory stays bounded by the
+/// in-flight blocks (or batches) plus each worker's own module state.
 pub fn process_file_parallel(
     path: &Path,
     config: &FastQCConfig,
     num_threads: usize,
-) -> Result<(Vec<Box<dyn QCModule>>, u64)> {
-    let num_workers = num_threads.max(1);
+) -> Result<ModuleState> {
+    let num_workers = num_threads.clamp(1, max_useful_workers(path));
 
-    // Bounded channel: reader sends batches, workers consume them
-    let (sender, receiver) = channel::bounded::<Vec<Sequence>>(CHANNEL_CAPACITY);
+    if fastq_block_path_applicable(path) {
+        if let Some(result) = process_fastq_blocks(path, config, num_workers)? {
+            return Ok(result);
+        }
+    }
+    process_records_parallel(path, config, num_workers)
+}
+
+/// Worker threads past which a single file stops benefiting from more of them.
+///
+/// One reader thread feeds every worker, so its throughput is the ceiling —
+/// and each extra worker also adds a whole set of module state that has to be
+/// allocated, then merged at the end. Past the ceiling, wall time gets
+/// *worse* while resident memory keeps climbing, so a run given a large `-t`
+/// on a single file would otherwise pay several hundred extra MB for a
+/// slowdown.
+///
+/// The ceiling depends on what the reader has to do. On a 4M-read NextSeq
+/// file, gzipped input peaked at 4 workers (inflate-bound) and uncompressed
+/// input at 8. Any leftover budget is better spent on other files, which
+/// `split_thread_budget` in `main.rs` already prefers.
+fn max_useful_workers(path: &Path) -> usize {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    if name.ends_with(".gz") || name.ends_with(".bz2") {
+        4
+    } else {
+        8
+    }
+}
+
+/// Whether `path` can take the FASTQ block fast path.
+fn fastq_block_path_applicable(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+
+    let is_fastq = ["fastq", "fq"].iter().any(|ext| {
+        name.ends_with(&format!(".{ext}"))
+            || name.ends_with(&format!(".{ext}.gz"))
+            || name.ends_with(&format!(".{ext}.bz2"))
+    });
+    if !is_fastq {
+        return false;
+    }
+
+    // A colorspace record decodes to one more base than its quality line has
+    // scores, which the fast path deliberately doesn't model. A probe that
+    // errors also defers to the generic path, so the failure gets reported
+    // there with its usual context rather than from inside this check.
+    !matches!(block::first_record_is_colorspace(path), Ok(true) | Err(_))
+}
+
+/// The FASTQ fast path: reader thread decompresses and cuts at record
+/// boundaries, workers parse and analyze.
+///
+/// Returns `Ok(None)` when the input doesn't fit the strict
+/// four-lines-per-record structure the block parser requires, so the caller
+/// can retry on the tolerant per-record reader instead of failing the run.
+fn process_fastq_blocks(
+    path: &Path,
+    config: &FastQCConfig,
+    num_workers: usize,
+) -> Result<Option<ModuleState>> {
+    // Each block goes to two consumers: whichever pool worker is free, and
+    // the single in-order instance of the `wants_all_reads` modules. Sharing
+    // one `Arc` rather than copying keeps that free; both channels are
+    // bounded, so the slower consumer applies backpressure to the reader and
+    // in-flight block memory stays at ~(num_workers + 2) * BLOCK_SIZE.
+    let capacity = num_workers + 2;
+    let (block_tx, block_rx) = channel::bounded::<Arc<Vec<u8>>>(capacity);
+    let (serial_tx, serial_rx) = channel::bounded::<Arc<Vec<u8>>>(capacity);
+
+    let path_owned = path.to_path_buf();
+    let reader_handle = thread::spawn(move || -> Result<()> {
+        let mut reader = FastqBlockReader::new(fastq::open_decompressed(&path_owned)?);
+        loop {
+            let mut buf = Vec::with_capacity(BLOCK_SIZE);
+            if !reader.next_block(&mut buf)? {
+                return Ok(());
+            }
+            let block = Arc::new(buf);
+            // Send to the in-order consumer first so it never falls behind
+            // the pool by more than the channel depth.
+            if serial_tx.send(Arc::clone(&block)).is_err() {
+                return Ok(());
+            }
+            if block_tx.send(block).is_err() {
+                return Ok(());
+            }
+        }
+    });
+
+    // The in-order consumer: one module set, every block, file order.
+    let serial_config = config.clone();
+    let serial_handle = thread::spawn(move || -> Result<ModuleState, BlockParseError> {
+        let mut modules = ModuleFactory::create_modules(&serial_config);
+        let mut seq = Sequence::empty();
+        while let Ok(block) = serial_rx.recv() {
+            for record in RecordIter::new(&block) {
+                let record = record?;
+                seq.refill(
+                    block::header_str(record.header)?,
+                    record.sequence,
+                    record.quality,
+                );
+                for module in modules.iter_mut() {
+                    if !module.wants_all_reads()
+                        || !should_process(&seq, serial_config.nofilter, module.as_ref())
+                    {
+                        continue;
+                    }
+                    module.process_sequence(&seq);
+                }
+            }
+        }
+        // Read counts come from the pool workers; this instance would
+        // double them.
+        Ok((modules, 0))
+    });
+
+    let mut worker_handles = Vec::with_capacity(num_workers);
+    for _ in 0..num_workers {
+        let rx = block_rx.clone();
+        let worker_config = config.clone();
+        let handle = thread::spawn(move || -> Result<ModuleState, BlockParseError> {
+            let mut modules = ModuleFactory::create_modules(&worker_config);
+            let mut count: u64 = 0;
+            // One record reused for the whole block: the modules copy out
+            // whatever they need, so nothing outlives an iteration.
+            let mut seq = Sequence::empty();
+
+            while let Ok(block) = rx.recv() {
+                for record in RecordIter::new(&block) {
+                    let record = record?;
+                    seq.refill(
+                        block::header_str(record.header)?,
+                        record.sequence,
+                        record.quality,
+                    );
+                    for module in modules.iter_mut() {
+                        // Left to the in-order consumer, and left empty
+                        // here so it costs no memory per worker.
+                        if module.wants_all_reads()
+                            || !should_process(&seq, worker_config.nofilter, module.as_ref())
+                        {
+                            continue;
+                        }
+                        module.process_sequence(&seq);
+                    }
+                    count += 1;
+                }
+            }
+            Ok((modules, count))
+        });
+        worker_handles.push(handle);
+    }
+
+    // Drop our copy so the workers see the block channel close.
+    drop(block_rx);
+
+    let reader_result = reader_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("Reader thread panicked"))?;
+
+    let mut worker_results: Vec<ModuleState> = Vec::new();
+    let mut parse_error: Option<BlockParseError> = None;
+    for handle in worker_handles {
+        match handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("Worker thread panicked"))?
+        {
+            Ok(result) => worker_results.push(result),
+            Err(e) => {
+                if parse_error.is_none() {
+                    parse_error = Some(e);
+                }
+            }
+        }
+    }
+    match serial_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("Serial module thread panicked"))?
+    {
+        Ok(result) => worker_results.push(result),
+        Err(e) => {
+            if parse_error.is_none() {
+                parse_error = Some(e);
+            }
+        }
+    }
+
+    if let Some(e) = parse_error {
+        eprintln!("Note: retrying with the per-record FASTQ reader ({e})");
+        return Ok(None);
+    }
+    // Only surface reader I/O errors once parsing is known to be clean, so a
+    // structural mismatch is retried rather than reported as an I/O failure.
+    reader_result?;
+
+    finish_modules(worker_results, config).map(Some)
+}
+
+/// The generic path: reader thread produces owned `Sequence` records, workers
+/// consume batches of them. Used for every non-FASTQ format.
+fn process_records_parallel(
+    path: &Path,
+    config: &FastQCConfig,
+    num_workers: usize,
+) -> Result<ModuleState> {
+    // Bounded channels: reader sends each batch to the worker pool and to the
+    // single in-order consumer of the `wants_all_reads` modules, sharing one
+    // `Arc` between them.
+    let (sender, receiver) = channel::bounded::<Arc<Vec<Sequence>>>(CHANNEL_CAPACITY);
+    let (serial_tx, serial_rx) = channel::bounded::<Arc<Vec<Sequence>>>(CHANNEL_CAPACITY);
 
     // Spawn reader thread
     let path_owned = path.to_path_buf();
@@ -59,32 +284,63 @@ pub fn process_file_parallel(
             (TARGET_BATCH_BYTES / avg_len).clamp(64, DEFAULT_BATCH_SIZE)
         };
 
+        // Hand one batch to both consumers, in-order consumer first.
+        let dispatch = |batch: Vec<Sequence>| -> bool {
+            let batch = Arc::new(batch);
+            serial_tx.send(Arc::clone(&batch)).is_ok() && sender.send(batch).is_ok()
+        };
+
         // Send probe reads as the first batch
         let mut batch = Vec::with_capacity(batch_size);
         for seq in probe_reads {
             batch.push(seq);
-            if batch.len() >= batch_size {
-                if sender.send(batch).is_err() {
-                    return Ok(());
-                }
-                batch = Vec::with_capacity(batch_size);
+            if batch.len() >= batch_size
+                && !dispatch(std::mem::replace(
+                    &mut batch,
+                    Vec::with_capacity(batch_size),
+                ))
+            {
+                return Ok(());
             }
         }
 
         // Continue with remaining reads
         while let Some(seq) = reader.next_sequence()? {
             batch.push(seq);
-            if batch.len() >= batch_size {
-                if sender.send(batch).is_err() {
-                    return Ok(());
-                }
-                batch = Vec::with_capacity(batch_size);
+            if batch.len() >= batch_size
+                && !dispatch(std::mem::replace(
+                    &mut batch,
+                    Vec::with_capacity(batch_size),
+                ))
+            {
+                return Ok(());
             }
         }
         if !batch.is_empty() {
-            let _ = sender.send(batch);
+            dispatch(batch);
         }
         Ok(())
+    });
+
+    // The in-order consumer: one module set, every batch, file order.
+    let serial_config = config.clone();
+    let serial_handle = thread::spawn(move || -> ModuleState {
+        let mut modules = ModuleFactory::create_modules(&serial_config);
+        while let Ok(batch) = serial_rx.recv() {
+            for seq in batch.iter() {
+                for module in modules.iter_mut() {
+                    if !module.wants_all_reads()
+                        || !should_process(seq, serial_config.nofilter, module.as_ref())
+                    {
+                        continue;
+                    }
+                    module.process_sequence(seq);
+                }
+            }
+        }
+        // Read counts come from the pool workers; this instance would double
+        // them.
+        (modules, 0)
     });
 
     // Spawn worker threads, each with independent module instances
@@ -92,14 +348,18 @@ pub fn process_file_parallel(
     for _ in 0..num_workers {
         let rx = receiver.clone();
         let worker_config = config.clone();
-        let handle = thread::spawn(move || -> (Vec<Box<dyn QCModule>>, u64) {
+        let handle = thread::spawn(move || -> ModuleState {
             let mut modules = ModuleFactory::create_modules(&worker_config);
             let mut count: u64 = 0;
 
             while let Ok(batch) = rx.recv() {
-                for seq in &batch {
+                for seq in batch.iter() {
                     for module in modules.iter_mut() {
-                        if !should_process(seq, worker_config.nofilter, module.as_ref()) {
+                        // Left to the in-order consumer, and left empty here
+                        // so it costs no memory per worker.
+                        if module.wants_all_reads()
+                            || !should_process(seq, worker_config.nofilter, module.as_ref())
+                        {
                             continue;
                         }
                         module.process_sequence(seq);
@@ -121,15 +381,30 @@ pub fn process_file_parallel(
         .map_err(|_| anyhow::anyhow!("Reader thread panicked"))??;
 
     // Collect worker results
-    let mut worker_results: Vec<(Vec<Box<dyn QCModule>>, u64)> = Vec::new();
+    let mut worker_results: Vec<ModuleState> = Vec::new();
     for handle in worker_handles {
         let result = handle
             .join()
             .map_err(|_| anyhow::anyhow!("Worker thread panicked"))?;
         worker_results.push(result);
     }
+    worker_results.push(
+        serial_handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("Serial module thread panicked"))?,
+    );
 
-    // Merge all worker module states into the first worker's state
+    finish_modules(worker_results, config)
+}
+
+/// One consumer's finished module state plus the reads it counted.
+type ModuleState = (Vec<Box<dyn QCModule>>, u64);
+
+/// Merge every worker's module state into one set and compute final results.
+fn finish_modules(
+    mut worker_results: Vec<ModuleState>,
+    config: &FastQCConfig,
+) -> Result<ModuleState> {
     let total_count: u64 = worker_results.iter().map(|(_, c)| c).sum();
 
     if worker_results.is_empty() {
@@ -194,6 +469,18 @@ mod tests {
     use super::*;
     use crate::config::FastQCConfig;
     use std::io::Write;
+
+    #[test]
+    fn max_useful_workers_is_lower_for_compressed_input() {
+        // Compressed input is inflate-bound on the single reader thread, so
+        // it saturates with fewer workers than plain input does.
+        assert_eq!(max_useful_workers(Path::new("s.fastq.gz")), 4);
+        assert_eq!(max_useful_workers(Path::new("s.fastq.bz2")), 4);
+        assert_eq!(max_useful_workers(Path::new("s.fastq")), 8);
+        // Detection is case-insensitive, matching the compression sniffing
+        // the readers themselves do.
+        assert_eq!(max_useful_workers(Path::new("s.FASTQ.GZ")), 4);
+    }
 
     #[test]
     fn estimate_decompressed_size_scales_compressed_extensions() {

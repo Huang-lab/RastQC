@@ -1,5 +1,5 @@
 {% set name = "rastqc" %}
-{% set version = "0.1.0" %}
+{% set version = "0.2.0" %}
 
 package:
   name: {{ name }}
@@ -7,7 +7,9 @@ package:
 
 source:
   url: https://github.com/Huang-lab/RastQC/archive/refs/tags/v{{ version }}.tar.gz
-  sha256: 8f1417836958637602e17e1c17ced3e4a05bcbe7d013dd6cc34ed0dc341136d1
+  # Recompute when the release tag is pushed:
+  #   curl -sL https://github.com/Huang-lab/RastQC/archive/refs/tags/v0.2.0.tar.gz | shasum -a 256
+  sha256: 0000000000000000000000000000000000000000000000000000000000000000
 
 build:
   number: 0

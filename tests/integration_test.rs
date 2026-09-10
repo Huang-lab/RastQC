@@ -475,7 +475,13 @@ fn test_version_flag() {
         .expect("Failed to run");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("0.1.0"));
+    // Compare against the manifest version rather than a literal, so a
+    // release bump can't leave `--version` and this assertion disagreeing.
+    let expected = env!("CARGO_PKG_VERSION");
+    assert!(
+        stdout.contains(expected),
+        "--version printed {stdout:?}, expected it to contain {expected:?}"
+    );
 }
 
 #[test]
