@@ -123,10 +123,10 @@ impl QCModule for BasicStats {
         // accumulated, so a second call can't double-count.
         let count_of =
             |bases: [u8; 2]| self.base_hist[bases[0] as usize] + self.base_hist[bases[1] as usize];
-        self.a_count = count_of([b'A', b'a']);
-        self.t_count = count_of([b'T', b't']);
-        self.g_count = count_of([b'G', b'g']);
-        self.c_count = count_of([b'C', b'c']);
+        self.a_count = count_of(*b"Aa");
+        self.t_count = count_of(*b"Tt");
+        self.g_count = count_of(*b"Gg");
+        self.c_count = count_of(*b"Cc");
         let acgt = self.a_count + self.t_count + self.g_count + self.c_count;
         self.n_count = self.base_hist.iter().sum::<u64>() - acgt;
 
