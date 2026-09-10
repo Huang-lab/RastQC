@@ -102,12 +102,22 @@ bench() {
         timefile=$(mktemp)
         local start end
         start=$(date +%s.%N 2>/dev/null || python3 -c 'import time;print(time.time())')
+        local rc=0
         if [ -n "$TIME_FLAG" ]; then
-            /usr/bin/time $TIME_FLAG "${cmd[@]}" >/dev/null 2>"$timefile" || true
+            /usr/bin/time $TIME_FLAG "${cmd[@]}" >/dev/null 2>"$timefile" || rc=$?
         else
-            "${cmd[@]}" >/dev/null 2>"$timefile" || true
+            "${cmd[@]}" >/dev/null 2>"$timefile" || rc=$?
         fi
         end=$(date +%s.%N 2>/dev/null || python3 -c 'import time;print(time.time())')
+
+        # A tool that rejected the input exits fast; recording that as a wall
+        # time would report a failure as a speedup.
+        if [ "$rc" -ne 0 ]; then
+            printf '  %-24s FAILED (exit %s) — not recorded\n' "$tool" "$rc"
+            sed -n '1,3p' "$timefile" | sed 's/^/      /'
+            rm -f "$timefile"
+            return
+        fi
 
         walls+=("$(awk -v s="$start" -v e="$end" 'BEGIN{printf "%.2f", e-s}')")
         local rss_raw

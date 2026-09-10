@@ -30,27 +30,27 @@ documented in its own `--help` as *"NOT YET IMPLEMENTED IN FALCO"*. The
 
 | Tool | Wall | Peak RSS | vs Falco |
 |------|------|----------|----------|
-| Falco 1.2.5 | 30.0 s | 86 MB | — |
-| **RastQC 0.2.0 `-t 1`** | **10.3 s** | 115 MB | **2.9× faster** |
-| **RastQC 0.2.0 `-t 4`** | **7.0 s** | 149 MB | **4.3× faster** |
-| RastQC 0.1.0 `-t 1` | 64.9 s | 114 MB | 2.2× *slower* |
-| RastQC 0.1.0 `-t 4` | 21.2 s | 330 MB | 1.4× faster |
+| Falco 1.2.5 | 32.6 s | 86 MB | — |
+| **RastQC 0.2.0 `-t 1`** | **11.3 s** | 126 MB | **2.9× faster** |
+| **RastQC 0.2.0 `-t 4`** | **6.9 s** | 158 MB | **4.7× faster** |
+| RastQC 0.1.0 `-t 1` | 64.9 s | 114 MB | 2.0× *slower* |
+| RastQC 0.1.0 `-t 4` | 20.9 s | 322 MB | 1.6× faster |
 
 ### DRR048760 — 1.2M reads, 76 bp, 54 MB gzipped
 
 | Tool | Wall | Peak RSS | vs Falco |
 |------|------|----------|----------|
-| Falco 1.2.5 | 2.30 s | 88 MB | — |
-| **RastQC 0.2.0 `-t 1`** | **0.83 s** | 97 MB | **2.8× faster** |
-| **RastQC 0.2.0 `-t 4`** | **0.68 s** | 121 MB | **3.4× faster** |
+| Falco 1.2.5 | 2.32 s | 88 MB | — |
+| **RastQC 0.2.0 `-t 1`** | **0.83 s** | 95 MB | **2.8× faster** |
+| **RastQC 0.2.0 `-t 4`** | **0.67 s** | 128 MB | **3.5× faster** |
 | RastQC 0.1.0 `-t 1` | 4.37 s | 107 MB | 1.9× *slower* |
 
 ### Both files in one invocation
 
 | Tool | Wall | Peak RSS | vs Falco |
 |------|------|----------|----------|
-| Falco 1.2.5 | 32.5 s | 93 MB | — |
-| **RastQC 0.2.0 `-t 4`** | **8.2 s** | 194 MB | **4.0× faster** |
+| Falco 1.2.5 | 35.1 s | 94 MB | — |
+| **RastQC 0.2.0 `-t 4`** | **8.6 s** | 208 MB | **4.1× faster** |
 
 ## What changed between 0.1.0 and 0.2.0
 
@@ -66,7 +66,7 @@ documentation assumed:
 | Gzip: flate2's default `miniz_oxide` backend → the pure-Rust `zlib-rs` backend | Inflate was ~2.6× slower than zlib and runs on the serial reader thread, capping every gzipped input |
 | FASTQ parsing moved off the single reader thread into the workers, on borrowed slices | Removed ~7 heap allocations and a UTF-8 validation per read |
 | Per-base loops (`basic_stats`, `per_base_sequence_content`, `per_sequence_gc`) made branch-free | ~57% of the remaining per-read work, roughly halved |
-| `-t` made a total budget rather than a per-file multiplier | `rastqc *.fastq.gz -t 16` on 6 files went from 4.6 GB and 4.2 s to 0.7 GB and 1.7 s |
+| `-t` made a total budget rather than a per-file multiplier | `rastqc *.fastq.gz -t 16` on 6 files went from 5.1 GB and 7.0 s to 0.6 GB and 1.3 s |
 
 ## Memory and thread count
 
@@ -75,12 +75,15 @@ memory grew with `-t` — and because file-level and within-file parallelism
 both took the full `-t`, it grew with the *product*. 0.2.0 keeps the
 whole-file modules on one instance and treats `-t` as a budget:
 
-| Files × `-t` | 0.1.0 peak RSS | 0.2.0 peak RSS |
+| Run | 0.1.0 | 0.2.0 |
 |---|---|---|
-| 1 file, `-t 4` | 330 MB | 149 MB |
-| 1 file, `-t 16` | 998 MB | 161 MB |
-| 6 files, `-t 8` | 3476 MB | 319 MB |
-| 6 files, `-t 16` | 4618 MB | 714 MB |
+| 1 file (828 MB gz), `-t 4` | 322 MB / 20.9 s | **163 MB / 7.4 s** |
+| 1 file (828 MB gz), `-t 16` | 1119 MB / 22.3 s | **146 MB / 6.9 s** |
+| 6 files (240 MB each), `-t 8` | 4052 MB / 6.3 s | **546 MB / 1.6 s** |
+| 6 files (240 MB each), `-t 16` | 5148 MB / 7.0 s | **586 MB / 1.3 s** |
+
+Note that 0.1.0 got *slower* as `-t` rose past 4 while its memory kept
+climbing; 0.2.0 does not.
 
 ## A note on the committed sample data
 

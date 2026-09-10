@@ -67,10 +67,19 @@ impl AdapterContent {
         } else {
             // Case-insensitive so a lowercase read (or adapter list) still
             // matches, as the byte-wise comparison it replaces did.
-            AhoCorasickBuilder::new()
+            match AhoCorasickBuilder::new()
                 .ascii_case_insensitive(true)
                 .build(&patterns)
-                .ok()
+            {
+                Ok(matcher) => Some(matcher),
+                Err(e) => {
+                    eprintln!(
+                        "Warning: could not build the adapter matcher ({e}); \
+                         falling back to a direct scan, which is slower."
+                    );
+                    None
+                }
+            }
         };
 
         AdapterContent {
@@ -87,6 +96,29 @@ impl AdapterContent {
     }
 
     const MAX_TRACKED_POSITIONS: usize = 1000;
+
+    /// Direct search for each adapter's first occurrence, used only when no
+    /// Aho-Corasick automaton could be built. This is what the module did for
+    /// every read before the automaton existed.
+    fn count_adapters_by_scanning(adapters: &mut [AdapterTracker], window: &[u8], seq_len: usize) {
+        for adapter in adapters.iter_mut() {
+            let adapter_len = adapter.sequence.len();
+            if adapter_len == 0 || seq_len < adapter_len {
+                continue;
+            }
+            let found = (0..=(seq_len - adapter_len)).find(|&start| {
+                window[start..start + adapter_len]
+                    .iter()
+                    .zip(adapter.sequence.iter())
+                    .all(|(&b, &a)| b.eq_ignore_ascii_case(&a))
+            });
+            if let Some(pos) = found {
+                for count in &mut adapter.positions[pos..seq_len] {
+                    *count += 1;
+                }
+            }
+        }
+    }
 
     fn ensure_length(positions: &mut Vec<u64>, len: usize) {
         let target = len.min(Self::MAX_TRACKED_POSITIONS);
@@ -127,6 +159,12 @@ impl QCModule for AdapterContent {
 
         let window = &seq.sequence[..seq_len];
         let Some(matcher) = matcher.as_ref() else {
+            // No automaton (an oversized custom adapter list can exceed
+            // Aho-Corasick's build limits). Reporting 0% adapter at every
+            // position would be indistinguishable from a genuinely clean
+            // library, so fall back to scanning directly rather than
+            // silently reporting nothing.
+            Self::count_adapters_by_scanning(adapters, window, seq_len);
             return;
         };
         // One pass settles the common case: no adapter anywhere in this read.

@@ -42,6 +42,9 @@ pub struct FastQCConfig {
     /// full budget, because those modules run on a single instance that sees
     /// every read (see `QCModule::wants_all_reads`).
     pub observation_cutoff: usize,
+    /// Mirrors `--quiet`: suppresses informational notes from the processing
+    /// pipeline. Warnings and errors are still printed.
+    pub quiet: bool,
 }
 
 /// Distinct sequences an observation-table module tracks before it freezes.
@@ -114,6 +117,7 @@ impl FastQCConfig {
             nofilter,
             dup_length,
             observation_cutoff: OBSERVATION_BUDGET,
+            quiet: false,
         })
     }
 

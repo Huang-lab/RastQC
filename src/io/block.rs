@@ -105,6 +105,15 @@ impl FastqBlockReader {
                 }
             }
 
+            // EOF terminates the final line just as a newline would. Without
+            // this, a file whose last record has no trailing newline yields no
+            // record boundary for it, and the record is discarded as a partial
+            // one — silently losing the last read, but only on this path, so
+            // the parallel and sequential runs disagreed.
+            if self.eof && buf.last().is_some_and(|&b| b != b'\n') {
+                buf.push(b'\n');
+            }
+
             let cut = last_record_boundary(buf);
             if cut > 0 {
                 self.carry.extend_from_slice(&buf[cut..]);
@@ -149,6 +158,7 @@ fn last_record_boundary(buf: &[u8]) -> usize {
 }
 
 /// One FASTQ record, borrowed from the block it was parsed out of.
+#[derive(Debug)]
 pub struct RawRecord<'a> {
     pub header: &'a [u8],
     pub sequence: &'a [u8],
@@ -280,5 +290,73 @@ pub fn first_record_is_colorspace(path: &std::path::Path) -> Result<bool> {
         Some(Ok(record)) => Ok(super::colorspace::is_colorspace(record.sequence)),
         Some(Err(e)) => Err(anyhow!(e)),
         None => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn blocks_of(data: &'static [u8]) -> Vec<Vec<u8>> {
+        let mut reader = FastqBlockReader::new(Box::new(Cursor::new(data)));
+        let mut out = Vec::new();
+        let mut buf = Vec::new();
+        while reader.next_block(&mut buf).unwrap() {
+            out.push(buf.clone());
+        }
+        out
+    }
+
+    fn record_count(data: &'static [u8]) -> usize {
+        blocks_of(data)
+            .iter()
+            .map(|b| RecordIter::new(b).count())
+            .sum()
+    }
+
+    #[test]
+    fn final_record_without_trailing_newline_is_kept() {
+        // A FASTQ whose last quality line has no newline is complete: EOF
+        // terminates it. Dropping it silently lost the last read of any such
+        // file, and only on this path, so the parallel and sequential runs
+        // disagreed on the read count.
+        assert_eq!(record_count(b"@a\nACGT\n+\nIIII\n@b\nACGT\n+\nIIII"), 2);
+        assert_eq!(record_count(b"@a\nACGT\n+\nIIII"), 1);
+    }
+
+    #[test]
+    fn trailing_newline_is_not_double_counted() {
+        assert_eq!(record_count(b"@a\nACGT\n+\nIIII\n"), 1);
+        assert_eq!(record_count(b"@a\nACGT\n+\nIIII\n@b\nTTTT\n+\nJJJJ\n"), 2);
+    }
+
+    #[test]
+    fn genuinely_partial_final_record_is_still_dropped() {
+        // Only three of the four lines are present: EOF terminating the third
+        // must not make it look like a whole record.
+        assert_eq!(record_count(b"@a\nACGT\n+\nIIII\n@b\nACGT\n+"), 1);
+    }
+
+    #[test]
+    fn records_parse_with_crlf_and_are_trimmed() {
+        let blocks = blocks_of(b"@a\r\nACGT\r\n+\r\nIIII\r\n");
+        let block = &blocks[0];
+        let record = RecordIter::new(block).next().unwrap().unwrap();
+        assert_eq!(record.header, b"@a");
+        assert_eq!(record.sequence, b"ACGT");
+        assert_eq!(record.quality, b"IIII");
+    }
+
+    #[test]
+    fn mismatched_sequence_and_quality_length_is_rejected() {
+        let blocks = blocks_of(b"@a\nACGT\n+\nII\n");
+        let err = RecordIter::new(&blocks[0]).next().unwrap().unwrap_err();
+        assert!(err.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn empty_input_yields_no_blocks() {
+        assert!(blocks_of(b"").is_empty());
     }
 }

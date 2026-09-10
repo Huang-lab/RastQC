@@ -43,8 +43,12 @@ for url in "${URLS[@]}"; do
         continue
     fi
     echo "downloading $(basename "$url") -> $DATADIR"
-    # -C - resumes a partial download, so an interrupted fetch can be retried.
-    curl -fL -C - -o "$out" "$url"
+    # Download to a .part file and only move it into place once curl reports
+    # success. Writing straight to $out would leave an interrupted fetch
+    # looking complete to the check above, and every tool would then be
+    # benchmarked against a truncated FASTQ. -C - resumes such a .part file.
+    curl -fL -C - -o "$out.part" "$url"
+    mv "$out.part" "$out"
 done
 
 echo ""

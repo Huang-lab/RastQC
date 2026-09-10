@@ -236,7 +236,9 @@ fn process_fastq_blocks(
     }
 
     if let Some(e) = parse_error {
-        eprintln!("Note: retrying with the per-record FASTQ reader ({e})");
+        if !config.quiet {
+            eprintln!("Note: retrying with the per-record FASTQ reader ({e})");
+        }
         return Ok(None);
     }
     // Only surface reader I/O errors once parsing is known to be clean, so a
@@ -560,6 +562,60 @@ mod tests {
             count, 100,
             "parallel path must read all 100 records across both gzip members, got {count}"
         );
+    }
+
+    /// A file whose last record has no trailing newline must not lose that
+    /// record on the parallel path. `should_use_parallel` gates on a 50 MB
+    /// estimate, so this calls the pipeline directly to exercise it with a
+    /// tiny fixture.
+    #[test]
+    fn parallel_keeps_a_final_record_with_no_trailing_newline() {
+        let dir = std::env::temp_dir().join(format!("rastqc_notrail_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("notrail.fastq");
+
+        let mut data = String::new();
+        for i in 0..500 {
+            data.push_str(&format!("@r{i}\nACGTACGTAC\n+\nIIIIIIIIII\n"));
+        }
+        let trimmed = data.trim_end_matches('\n');
+        std::fs::write(&path, trimmed).unwrap();
+
+        let config = FastQCConfig::new(None, None, None, 7, false, 50).unwrap();
+        let (_modules, count) = process_file_parallel(&path, &config, 4).unwrap();
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            count, 500,
+            "the final record has no trailing newline but is complete; got {count}"
+        );
+    }
+
+    /// The same file read with and without intra-file parallelism must give
+    /// the same read count — the property that the whole two-consumer design
+    /// exists to preserve.
+    #[test]
+    fn parallel_and_sequential_agree_on_read_count() {
+        let dir = std::env::temp_dir().join(format!("rastqc_agree_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agree.fastq");
+
+        let mut data = String::new();
+        for i in 0..2000 {
+            // Repeat a small pool of sequences so the duplication and
+            // overrepresented tables actually see duplicates.
+            let seq = ["ACGTACGTAC", "TTTTAAAACC", "GGCCGGCCGG"][i % 3];
+            data.push_str(&format!("@r{i}\n{seq}\n+\nIIIIIIIIII\n"));
+        }
+        std::fs::write(&path, &data).unwrap();
+
+        let config = FastQCConfig::new(None, None, None, 7, false, 50).unwrap();
+        let one = process_file_parallel(&path, &config, 1).unwrap().1;
+        let many = process_file_parallel(&path, &config, 8).unwrap().1;
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(one, 2000);
+        assert_eq!(many, 2000);
     }
 
     #[test]

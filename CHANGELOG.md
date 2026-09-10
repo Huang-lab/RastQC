@@ -13,7 +13,7 @@ places where 0.1.0's *parallel* runs disagreed with it.
 Prompted by [#12](https://github.com/Huang-lab/RastQC/issues/12), which
 reported RastQC running ~2× slower than Falco on NextSeq runs. That
 reproduced: on a public 18.7M-read NextSeq 500 run, 0.1.0 at `-t 1` took
-64.9 s against Falco's 30.0 s. 0.2.0 takes 10.3 s at `-t 1` and 7.0 s at
+64.9 s against Falco's 32.6 s. 0.2.0 takes 11.3 s at `-t 1` and 6.9 s at
 `-t 4`. Full numbers and method in [`benchmark/RESULTS.md`](benchmark/RESULTS.md).
 
 - **Adapter Content** searched every start position of every read for every
@@ -38,7 +38,7 @@ reproduced: on a public 18.7M-read NextSeq 500 run, 0.1.0 at `-t 1` took
 - **`-t` is now a total thread budget, not a per-file multiplier.** Files are
   analyzed concurrently *and* each file runs its own worker pool; both levels
   were given the full `-t`, so `rastqc *.fastq.gz -t 16` spawned up to ~256
-  workers. On 6 files that meant 4.6 GB resident — and it ran *slower* than
+  workers. On 6 files that meant 5.1 GB resident — and it ran *slower* than
   `-t 4`. The budget is now split across the two levels.
 - **Per-file worker count is capped** at where a single file stops benefiting
   (4 for compressed input, 8 for uncompressed). Past that the reader thread
@@ -47,8 +47,9 @@ reproduced: on a public 18.7M-read NextSeq 500 run, 0.1.0 at `-t 1` took
 - Modules that need the whole read stream now run on **one** instance instead
   of one per worker, so their state no longer scales with `-t`.
 
-Together: 1 file at `-t 16` went from 998 MB to 161 MB; 6 files at `-t 16`
-from 4.6 GB to 714 MB.
+Together: one 828 MB file at `-t 16` went from 1119 MB to 146 MB, and six
+240 MB files at `-t 16` from 5148 MB to 586 MB — while getting 3× and 5×
+faster respectively.
 
 ### Output
 
@@ -80,9 +81,17 @@ Both of these made a QC number depend on how the run was parallelized:
   `Error processing <file>` and then exited 0, so an unreadable or malformed
   input passed a Nextflow/Snakemake gate silently — the opposite of what
   `--exit-code` is for.
-- The declared MSRV was 1.70 while a dependency already required 1.75. It is
-  now 1.75, and CI builds on exactly the declared version so the two can't
+- The declared MSRV was 1.70 while dependencies already required 1.85. It is
+  now 1.85, and CI builds on exactly the declared version so the two can't
   drift again.
+- A FASTQ whose final record has no trailing newline no longer loses that
+  record on the parallel path — EOF terminates the last line just as a
+  newline does.
+- `--quiet` now also suppresses the note printed when an input falls back to
+  the tolerant per-record FASTQ reader.
+- Adapter Content falls back to a direct scan if the pattern matcher cannot
+  be built (reachable with a very large custom `--adapters` list) rather than
+  silently reporting 0% adapter content and a PASS.
 
 ### Added
 

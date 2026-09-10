@@ -5,7 +5,7 @@ A fast quality control tool for high-throughput sequencing data, written in Rust
 ## Features
 
 - **15 QC modules**: all 12 FastQC modules + 3 long-read QC modules
-- **Fast**: 2.9x faster than Falco single-threaded, 4.3x with 4 threads, on a real 18.7M-read NextSeq run ([benchmarks](benchmark/RESULTS.md))
+- **Fast**: 2.9x faster than Falco single-threaded, 4.7x with 4 threads, on a real 18.7M-read NextSeq run ([benchmarks](benchmark/RESULTS.md))
 - **Portable**: single 2.6 MB static binary, no Java runtime needed
 - **Compatible output**: HTML reports, tab-separated data files, ZIP archives, native MultiQC JSON
 - **Multi-file summary**: overview dashboard when processing many files
@@ -30,7 +30,7 @@ The Bioconda recipe lives in [`recipes/rastqc/`](recipes/rastqc/).
 ### From source
 
 ```bash
-# Requires Rust 1.75+
+# Requires Rust 1.85+
 cargo install --path .
 ```
 
@@ -298,9 +298,9 @@ row. Reproduce with `./benchmark/fetch_data.sh && ./benchmark/run_benchmark.sh`.
 
 | Dataset | Falco 1.2.5 | RastQC `-t 1` | RastQC `-t 4` |
 |---------|-------------|---------------|---------------|
-| DRR045135_1 — 18.7M reads, 144 bp, 828 MB | 30.0 s / 86 MB | **10.3 s** / 115 MB | **7.0 s** / 149 MB |
-| DRR048760 — 1.2M reads, 76 bp, 54 MB | 2.30 s / 88 MB | **0.83 s** / 97 MB | **0.68 s** / 121 MB |
-| Both files, one invocation | 32.5 s / 93 MB | — | **8.2 s** / 194 MB |
+| DRR045135_1 — 18.7M reads, 144 bp, 828 MB | 32.6 s / 86 MB | **11.3 s** / 126 MB | **6.9 s** / 158 MB |
+| DRR048760 — 1.2M reads, 76 bp, 54 MB | 2.32 s / 88 MB | **0.83 s** / 95 MB | **0.67 s** / 128 MB |
+| Both files, one invocation | 35.1 s / 94 MB | — | **8.6 s** / 208 MB |
 
 Full method, and what changed since 0.1.0, in [`benchmark/RESULTS.md`](benchmark/RESULTS.md).
 
@@ -338,10 +338,12 @@ invocation:
 
 | Run | RastQC 0.1.0 | RastQC 0.2.0 |
 |-----|--------------|--------------|
-| 1 file, `-t 4` | 330 MB | **149 MB** |
-| 1 file, `-t 16` | 998 MB | **161 MB** |
-| 6 files, `-t 8` | 3476 MB | **319 MB** |
-| 6 files, `-t 16` | 4618 MB | **714 MB** |
+| 1 file (828 MB gz), `-t 4` | 322 MB / 20.9 s | **163 MB / 7.4 s** |
+| 1 file (828 MB gz), `-t 16` | 1119 MB / 22.3 s | **146 MB / 6.9 s** |
+| 6 files (240 MB each), `-t 8` | 4052 MB / 6.3 s | **546 MB / 1.6 s** |
+| 6 files (240 MB each), `-t 16` | 5148 MB / 7.0 s | **586 MB / 1.3 s** |
+
+0.1.0 got *slower* as `-t` rose past 4 while its memory kept climbing.
 
 ### Resource comparison
 

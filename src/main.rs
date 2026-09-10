@@ -206,6 +206,8 @@ fn run() -> Result<ExitCode> {
         cli.dup_length,
     )?;
 
+    config.quiet = cli.quiet;
+
     if long_read {
         config.enable_long_read_modules();
         if !cli.quiet {
