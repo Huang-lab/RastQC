@@ -5,10 +5,16 @@ set -euo pipefail
 # RastQC Benchmark: Short-Read + Long-Read vs FastQC
 # ============================================================
 
-RASTQC="/Users/kuan-lin.huang/Projects/RastQC/target/release/rastqc"
-DATADIR="/Users/kuan-lin.huang/Projects/RastQC/benchmark/data"
-RESULTSDIR="/Users/kuan-lin.huang/Projects/RastQC/benchmark/results"
-THREADS=4
+# Resolve paths from this script's own location so the benchmark runs from any
+# checkout. Each may be overridden from the environment.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+RASTQC="${RASTQC:-$REPO_ROOT/target/release/rastqc}"
+FASTQC="${FASTQC:-fastqc}"
+DATADIR="${DATADIR:-$REPO_ROOT/benchmark/data}"
+RESULTSDIR="${RESULTSDIR:-$REPO_ROOT/benchmark/results}"
+THREADS="${THREADS:-4}"
 
 mkdir -p "$RESULTSDIR/fastqc" "$RESULTSDIR/rastqc"
 
@@ -93,7 +99,7 @@ run_file() {
     echo "  Reads: $nreads"
 
     # FastQC
-    bench "fastqc" "$fname" "$ftype" fastqc -t "$THREADS" -o "$RESULTSDIR/fastqc" --quiet "$f"
+    bench "fastqc" "$fname" "$ftype" "$FASTQC" -t "$THREADS" -o "$RESULTSDIR/fastqc" --quiet "$f"
 
     # RastQC (short-read mode)
     bench "rastqc" "$fname" "$ftype" "$RASTQC" -t "$THREADS" -o "$RESULTSDIR/rastqc" -q --time "$f"
@@ -120,7 +126,7 @@ if [ ${#SHORT_FILES[@]} -gt 0 ]; then
     # All short-read files together
     echo ""
     echo "=== ALL SHORT-READ FILES TOGETHER ==="
-    bench "fastqc" "ALL_SHORT" "short" fastqc -t "$THREADS" -o "$RESULTSDIR/fastqc" --quiet "${SHORT_FILES[@]}"
+    bench "fastqc" "ALL_SHORT" "short" "$FASTQC" -t "$THREADS" -o "$RESULTSDIR/fastqc" --quiet "${SHORT_FILES[@]}"
     bench "rastqc" "ALL_SHORT" "short" "$RASTQC" -t "$THREADS" -o "$RESULTSDIR/rastqc" -q --time "${SHORT_FILES[@]}"
 fi
 
@@ -141,11 +147,12 @@ echo "  Results saved to: $CSV"
 echo "=============================================="
 
 # ---- Summary ----
-python3 << 'PYEOF'
+CSV="$CSV" python3 << 'PYEOF'
 import csv
+import os
 
 results = {}
-with open("/Users/kuan-lin.huang/Projects/RastQC/benchmark/results/benchmark_results.csv") as f:
+with open(os.environ["CSV"]) as f:
     reader = csv.DictReader(f)
     for row in reader:
         key = row["file"]
