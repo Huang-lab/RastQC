@@ -7,9 +7,7 @@ package:
 
 source:
   url: https://github.com/Huang-lab/RastQC/archive/refs/tags/v{{ version }}.tar.gz
-  # Recompute when the release tag is pushed:
-  #   curl -sL https://github.com/Huang-lab/RastQC/archive/refs/tags/v0.2.0.tar.gz | shasum -a 256
-  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+  sha256: ceda2350f81218dc878652b467e9d0f27807d9001cd802f371088e20b9a5fd41
 
 build:
   number: 0
@@ -18,6 +16,8 @@ build:
 
 requirements:
   build:
+    # Cargo.toml declares rust-version = 1.85; cargo will refuse to build on
+    # anything older, with a clear message.
     - {{ compiler('rust') }}
     - {{ compiler('c') }}
     - {{ compiler('cxx') }}
