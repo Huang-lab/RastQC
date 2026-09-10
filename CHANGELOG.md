@@ -2,7 +2,7 @@
 
 All notable changes to RastQC are documented here.
 
-## [0.2.0] — unreleased
+## [0.2.0] — 2026-09-10
 
 Performance, memory and reproducibility release. Reported QC values are
 unchanged from a 0.1.0 **sequential** run; see "Output" below for the two
