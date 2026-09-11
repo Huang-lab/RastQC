@@ -13,9 +13,16 @@ a 0.2.0 `-t 1` run and a `-t 4` run of this build.
 
 | | 0.2.0 | this build | |
 |---|---|---|---|
-| `-t 1` | 4.39 s | **3.96 s** | 1.11x |
-| `-t 4` | 2.90 s | **2.54 s** | 1.14x |
-| system time, `-t 4` | 0.43 s | **0.12 s** | |
+| wall, `-t 1` | 4.39 s | **3.96 s** | 1.11x |
+| wall, `-t 4` | 2.90 s | **2.54 s** | 1.14x |
+| system time, `-t 4` | 0.43 s | **0.12 s** | 3.6x less |
+| peak RSS, `-t 1` | 114 MB | **71 MB** | |
+| peak RSS, `-t 4` | 148 MB | **74 MB** | |
+| peak RSS, `-t 16` | 142 MB | **78 MB** | |
+
+Peak memory roughly halves and is now essentially flat across `-t`, because
+the working set is a small pool of reused buffers rather than a churn of
+1 MB allocations whose peak depended on how many were in flight at once.
 
 - **The block reader now recycles its buffers.** It allocated a fresh 1 MB
   `Vec` for every block and dropped it once both consumers were done, so each

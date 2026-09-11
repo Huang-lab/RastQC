@@ -38,7 +38,7 @@ SET="${1:-all}"
 # fetched in one stream (the per-request overhead is not worth splitting 20 MB).
 PARALLEL="${PARALLEL:-12}"
 CHUNK_MIN_BYTES="${CHUNK_MIN_BYTES:-33554432}"   # 32 MB
-CHUNK_RETRIES="${CHUNK_RETRIES:-3}"
+CHUNK_RETRIES="${CHUNK_RETRIES:-12}"
 
 # group | filename | expected bytes | url | description
 #
@@ -84,7 +84,8 @@ fetch_file() {
 
     if [ "$bytes" -lt "$CHUNK_MIN_BYTES" ] || [ "$PARALLEL" -le 1 ]; then
         # -C - resumes a .part left by a previous interrupted run.
-        curl -fL -C - -o "$out.part" "$url" || return 1
+        curl -fL -C - --connect-timeout 30 --speed-limit 4096 --speed-time 60 \
+             -o "$out.part" "$url" || return 1
     else
         local chunkdir="$out.chunks"
         mkdir -p "$chunkdir"
@@ -99,11 +100,25 @@ fetch_file() {
                 [ "$s" -gt "$e" ] && continue
                 local want=$((e - s + 1)) cf="$chunkdir/$i"
 
+                local have=0
+                [ -f "$cf" ] && have=$(wc -c <"$cf" | tr -d ' ')
                 # Skip chunks a previous attempt already completed.
-                if [ -f "$cf" ] && [ "$(wc -c <"$cf" | tr -d ' ')" = "$want" ]; then
-                    continue
+                [ "$have" -eq "$want" ] && continue
+                # A chunk somehow longer than its range is corrupt; start over.
+                if [ "$have" -gt "$want" ]; then
+                    rm -f "$cf"; have=0
                 fi
-                curl -fsSL -r "$s-$e" -o "$cf" "$url" &
+
+                # Resume mid-chunk by asking for the remainder of the range and
+                # appending. ENA stalls connections under sustained load, and a
+                # 1.4 GB file split twelve ways means each chunk is large enough
+                # that restarting one from zero wastes real time.
+                # --speed-time/--speed-limit abort a connection that has gone
+                # quiet so the retry loop can replace it; without them a stalled
+                # transfer hangs forever with no output.
+                curl -fsSL -r "$((s + have))-$e" \
+                     --connect-timeout 30 --speed-limit 4096 --speed-time 60 \
+                     "$url" >> "$cf" &
                 pids+=($!)
             done
             for i in "${pids[@]:-}"; do [ -n "$i" ] && wait "$i" || true; done
