@@ -38,6 +38,15 @@ a 0.2.0 `-t 1` run and a `-t 4` run of this build.
   megabases, and an array indexed by length would reintroduce the memory
   blowup 0.2.0 fixed.
 
+### Added
+
+- `benchmark/check_concordance.sh` — runs FastQC as the reference and compares
+  RastQC's per-module PASS/WARN/FAIL calls against it, and Falco's too when
+  Falco is installed. The paper's central correctness claim had no script in
+  the repository, so the one number that most matters for a drop-in
+  replacement could not be reproduced. It exits non-zero on any disagreement,
+  so it also works as a gate.
+
 ### Changed
 
 - `benchmark/fetch_data.sh` now fetches every dataset the benchmarks and the
