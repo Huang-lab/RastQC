@@ -44,14 +44,47 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
+  scripts:
+    name: scripts
+    # The benchmark scripts produce the numbers in RESULTS.md and the paper,
+    # so a break in them is a break in published results. They are also
+    # expected to run on the bash macOS ships, which is 3.2 — new-enough
+    # constructs (associative arrays) parse fine on CI's bash 5 and fail only
+    # on a contributor's Mac, so check them under an explicit `bash -n` and
+    # with shellcheck.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check shell scripts
+        run: |
+          for f in benchmark/*.sh recipes/*/build.sh; do
+            echo "checking $f"
+            bash -n "$f"
+          done
+
+      - name: Shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          # SC2086 (word splitting) is deliberate for $TIME_FLAG and friends.
+          # SC2218 is a false positive on run_benchmark.sh as of shellcheck
+          # 0.11: it reports file_stats and stat_of as "defined later" when
+          # both are defined at top level well before every use (lines 78 and
+          # 108, first used at 126 and 205). Re-check whether it still fires
+          # before assuming a future SC2218 report is also spurious.
+          shellcheck -e SC2086,SC2218 benchmark/*.sh
+
+      - name: Byte-compile the figure script
+        run: python3 -m py_compile paper/analyze_benchmarks.py
+
   msrv:
     name: msrv
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Cargo.toml declared 1.70 while a dependency had already raised the
-      # real floor to 1.75, and nothing caught it. Build on exactly the
+      # Cargo.toml declared 1.70 while dependencies had already raised the
+      # real floor to 1.85, and nothing caught it. Build on exactly the
       # declared version so the two can't drift again.
       - name: Read declared MSRV
         id: msrv
