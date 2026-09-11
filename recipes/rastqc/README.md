@@ -43,15 +43,52 @@ rastqc-nanopore --long-read --help
 
 ## Before submitting to bioconda-recipes
 
-1. Push a release tag upstream: `git tag v0.1.0 && git push --tags`.
-2. Fill `source.sha256` in both `meta.yaml` files:
-   ```bash
-   curl -sL https://github.com/Huang-lab/RastQC/archive/refs/tags/v0.1.0.tar.gz | sha256sum
-   ```
-3. Confirm the maintainer GitHub handle in `extra.recipe-maintainers`.
+Both recipes build from the release tarball with `--locked`, so the tag must
+carry a `Cargo.lock` that resolves against its own `Cargo.toml`. Check that
+against the tarball rather than the working tree — a lockfile that is stale
+only in the tag is invisible locally:
+
+```bash
+VERSION=0.2.0
+
+# 1. Push the release tag upstream first; the recipe source URL points at it.
+git tag "v${VERSION}" && git push --tags
+
+# 2. Set source.sha256 in both meta.yaml files (same tarball, same hash).
+curl -sL "https://github.com/Huang-lab/RastQC/archive/refs/tags/v${VERSION}.tar.gz" \
+  | shasum -a 256   # sha256sum on Linux
+
+# 3. Confirm the tag builds the way bioconda builds it.
+curl -sL "https://github.com/Huang-lab/RastQC/archive/refs/tags/v${VERSION}.tar.gz" | tar xz
+cd "RastQC-${VERSION}"
+cargo install --no-track --locked --root /tmp/rqc-prefix --path . --bin rastqc
+/tmp/rqc-prefix/bin/rastqc --version   # must print ${VERSION}
+```
+
+Then confirm the maintainer GitHub handle in `extra.recipe-maintainers`.
 
 ## Submission
 
-Fork [`bioconda/bioconda-recipes`](https://github.com/bioconda/bioconda-recipes),
+For the **first** submission of a package, fork
+[`bioconda/bioconda-recipes`](https://github.com/bioconda/bioconda-recipes) and
 copy both `rastqc/` and `rastqc-nanopore/` directories into `recipes/` in the
-fork, open a PR, and address bioconda CI feedback (linter + bulk build).
+fork.
+
+For a **version bump** of a package already on bioconda, diff against the live
+recipe before copying, because bioconda's linter and its maintainers amend
+merged recipes in place and those edits are not mirrored back here:
+
+```bash
+for pkg in rastqc rastqc-nanopore; do
+  curl -sL "https://raw.githubusercontent.com/bioconda/bioconda-recipes/master/recipes/${pkg}/meta.yaml" \
+    | diff -u - "recipes/${pkg}/meta.yaml"
+done
+```
+
+Every difference should be one you intended. In particular `extra.additional-platforms`
+(`linux-aarch64`, `osx-arm64`) is added on the bioconda side during review;
+dropping it silently stops publishing ARM builds, which is not something CI
+flags. Reset `build.number` to `0` for a new version.
+
+Open a PR and address bioconda CI feedback (linter + bulk build). Merging it
+also rebuilds the BioContainer image for the new version.
