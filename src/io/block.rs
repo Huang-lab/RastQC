@@ -291,6 +291,36 @@ pub(crate) fn header_str(header: &[u8]) -> Result<&str, BlockParseError> {
 /// Colorspace decoding changes a record's length relationship with its quality
 /// line, so those (legacy) files stay on the per-record reader instead of
 /// growing a special case in the hot loop.
+/// Mean sequence length over the records in the first block, or `None` when
+/// that cannot be determined (unreadable, empty, or not parseable as blocks).
+///
+/// Used only to size the worker pool, so a rough figure from the head of the
+/// file is enough and a wrong answer costs throughput, never correctness.
+pub fn sample_mean_read_length(path: &std::path::Path) -> Option<usize> {
+    let mut reader = FastqBlockReader::new(super::fastq::open_decompressed(path).ok()?);
+    let mut buf = new_block_buffer();
+    if !reader.next_block(&mut buf).ok()? {
+        return None;
+    }
+
+    let mut records = 0usize;
+    let mut total = 0usize;
+    for record in RecordIter::new(&buf) {
+        let record = record.ok()?;
+        total += record.sequence.len();
+        records += 1;
+        // One block of a long-read file holds only a handful of records, and
+        // a short-read one holds thousands; this bound keeps the short-read
+        // case from walking the whole block for an answer it had after the
+        // first few hundred.
+        if records >= 1000 {
+            break;
+        }
+    }
+
+    (records > 0).then(|| total / records)
+}
+
 pub fn first_record_is_colorspace(path: &std::path::Path) -> Result<bool> {
     let mut reader = FastqBlockReader::new(super::fastq::open_decompressed(path)?);
     let mut buf = Vec::new();

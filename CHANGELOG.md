@@ -45,6 +45,28 @@ the working set is a small pool of reused buffers rather than a churn of
   megabases, and an array indexed by length would reintroduce the memory
   blowup 0.2.0 fixed.
 
+- **Long-read runs no longer get worse as `-t` rises.** The per-file worker
+  cap 0.2.0 introduced keyed off the filename extension alone, so long-read
+  input still got up to 4 or 8 workers. Per sequence GC content keeps one GC
+  model per distinct read length and each model's size grows with that
+  length, so every worker built its own set — hundreds of MB apiece on long
+  reads — while the reader thread stayed the ceiling. Measured on a 406 MB
+  ONT run (75.8k reads, 5.9 kb mean, 100.6 kb max), before:
+
+  | `-t` | wall | peak RSS |
+  |---|---|---|
+  | 1 | 2.37 s | 403 MB |
+  | 4 | 2.64 s | 979 MB |
+  | 16 | 2.67 s | 1004 MB |
+
+  More workers were slower *and* cost 2.5x the memory. The cap now samples
+  the mean read length from the first block and gives long-read files one
+  worker, leaving the rest of the budget for other files. After the change
+  peak RSS is flat at ~400 MB across `-t 1`, `-t 4` and `-t 16`, and a
+  282 MB PacBio run drops from 465 MB to 198 MB at `-t 4`. Worker count has
+  not affected reported values since 0.2.0, and `fastqc_data.txt` from a
+  0.2.0 `-t 1` run matches this build at `-t 16` exactly.
+
 ### Added
 
 - `benchmark/check_concordance.sh` — runs FastQC as the reference and compares
