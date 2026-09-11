@@ -23,6 +23,17 @@ use std::io::{self, Read};
 /// worker already carries.
 pub const BLOCK_SIZE: usize = 1024 * 1024;
 
+/// A buffer sized for one call to [`FastqBlockReader::next_block`].
+///
+/// The extra `READ_CHUNK` matters: `next_block` fills the buffer a chunk at a
+/// time and stops once it has reached `BLOCK_SIZE`, so the final chunk almost
+/// always pushes the length just past it. At exactly `BLOCK_SIZE` capacity
+/// that overshoot reallocated and copied the whole megabyte on essentially
+/// every block.
+pub fn new_block_buffer() -> Vec<u8> {
+    Vec::with_capacity(BLOCK_SIZE + READ_CHUNK)
+}
+
 /// Bytes requested per `read` call while filling a block.
 const READ_CHUNK: usize = 128 * 1024;
 

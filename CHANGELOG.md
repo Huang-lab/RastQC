@@ -2,6 +2,56 @@
 
 All notable changes to RastQC are documented here.
 
+## [Unreleased]
+
+### Performance
+
+Measured on a public 4.3M-read HiSeq run (ERR5897746_1, 320 MB gzipped),
+median of 6 runs, against 0.2.0 on the same machine. Output is byte-identical
+to 0.2.0 at every thread count — verified by diffing `fastqc_data.txt` between
+a 0.2.0 `-t 1` run and a `-t 4` run of this build.
+
+| | 0.2.0 | this build | |
+|---|---|---|---|
+| `-t 1` | 4.39 s | **3.96 s** | 1.11x |
+| `-t 4` | 2.90 s | **2.54 s** | 1.14x |
+| system time, `-t 4` | 0.43 s | **0.12 s** | |
+
+- **The block reader now recycles its buffers.** It allocated a fresh 1 MB
+  `Vec` for every block and dropped it once both consumers were done, so each
+  megabyte of input cost an `mmap` and a `madvise` teardown — which profiled as
+  the single largest cost in a run, above every QC module. Finished blocks are
+  now returned to the reader and refilled. This is where the 3.5x drop in
+  system time comes from.
+- **The block buffer no longer reallocates on every block.** `next_block`
+  fills in 128 KB chunks and stops once it has passed `BLOCK_SIZE`, so the last
+  chunk pushed the length just past a capacity of exactly `BLOCK_SIZE` — a
+  realloc and a 1 MB copy per block. Buffers are now allocated with room for
+  that overshoot.
+- **Per sequence quality scores** walked every quality string twice, once for
+  the run's minimum character and once for the read's sum. The two are now one
+  pass, and its per-read counter table is a flat array indexed by the mean
+  quality character (which cannot leave `0..=255`) rather than a hash map.
+- **Sequence Length Distribution** used a SipHash map for its once-per-read
+  probe; it now uses the same FxHash the other hot tables use. It stays a map
+  rather than an array because read length is unbounded — ONT reads reach
+  megabases, and an array indexed by length would reintroduce the memory
+  blowup 0.2.0 fixed.
+
+### Changed
+
+- `benchmark/fetch_data.sh` now fetches every dataset the benchmarks and the
+  paper use, verifies each against the byte size ENA reports, and downloads
+  large files as concurrent byte ranges. ENA throttles a single connection to
+  roughly 200 KB/s, which is over five hours for the full set; twelve ranges
+  measured ~2 MB/s.
+- `benchmark/run_benchmark.sh` classifies long-read inputs by their measured
+  mean read length instead of by filename. The previous `*_ont_*`/`*_pacbio_*`
+  convention silently benchmarked real ENA files as short-read, and it now
+  emits stable tool ids that `paper/analyze_benchmarks.py` matches on — the two
+  had drifted apart, so the figures were being generated from no data.
+- Both benchmark scripts now run on bash 3.2, which is what macOS ships.
+
 ## [0.2.0] — 2026-09-10
 
 Performance, memory and reproducibility release. Reported QC values are

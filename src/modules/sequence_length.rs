@@ -1,3 +1,4 @@
+use super::fasthash::FxBuildHasher;
 use super::{format_count_label, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
@@ -5,7 +6,11 @@ use std::any::Any;
 use std::collections::HashMap;
 
 pub struct SequenceLengthDist {
-    length_counts: HashMap<usize, u64>,
+    // Keyed by read length, which is unbounded — ONT reads reach megabases,
+    // so this stays a map rather than an array indexed by length. FxHash
+    // removes the SipHash cost of the once-per-read probe without giving
+    // the table a size that tracks the longest read in the file.
+    length_counts: HashMap<usize, u64, FxBuildHasher>,
     min_length: usize,
     max_length: usize,
     has_zero_length: bool,
@@ -19,7 +24,7 @@ pub struct SequenceLengthDist {
 impl SequenceLengthDist {
     pub fn new() -> Self {
         SequenceLengthDist {
-            length_counts: HashMap::new(),
+            length_counts: HashMap::default(),
             min_length: usize::MAX,
             max_length: 0,
             has_zero_length: false,

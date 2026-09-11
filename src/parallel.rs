@@ -1,5 +1,5 @@
 use crate::config::FastQCConfig;
-use crate::io::block::{self, BlockParseError, FastqBlockReader, RecordIter, BLOCK_SIZE};
+use crate::io::block::{self, BlockParseError, FastqBlockReader, RecordIter};
 use crate::io::fastq;
 use crate::io::{Sequence, SequenceReader};
 use crate::modules::{merge_module_sets, should_process, ModuleFactory, QCModule};
@@ -115,12 +115,27 @@ fn process_fastq_blocks(
     let capacity = num_workers + 2;
     let (block_tx, block_rx) = channel::bounded::<Arc<Vec<u8>>>(capacity);
     let (serial_tx, serial_rx) = channel::bounded::<Arc<Vec<u8>>>(capacity);
+    // Consumers hand finished blocks back so the reader can refill the same
+    // megabyte instead of allocating a new one. A fresh `Vec` per block meant
+    // an mmap and a `madvise` teardown per megabyte of input, which profiled
+    // as the single largest cost in the run — larger than any QC module.
+    let (recycle_tx, recycle_rx) = channel::unbounded::<Arc<Vec<u8>>>();
 
     let path_owned = path.to_path_buf();
     let reader_handle = thread::spawn(move || -> Result<()> {
         let mut reader = FastqBlockReader::new(fastq::open_decompressed(&path_owned)?);
+        let mut pool: Vec<Vec<u8>> = Vec::new();
         loop {
-            let mut buf = Vec::with_capacity(BLOCK_SIZE);
+            // Each block is held by two consumers, so the first return still
+            // has a live sibling and `try_unwrap` fails; dropping that handle
+            // leaves the second return able to reclaim the buffer.
+            while let Ok(done) = recycle_rx.try_recv() {
+                if let Ok(mut v) = Arc::try_unwrap(done) {
+                    v.clear();
+                    pool.push(v);
+                }
+            }
+            let mut buf = pool.pop().unwrap_or_else(block::new_block_buffer);
             if !reader.next_block(&mut buf)? {
                 return Ok(());
             }
@@ -138,6 +153,7 @@ fn process_fastq_blocks(
 
     // The in-order consumer: one module set, every block, file order.
     let serial_config = config.clone();
+    let serial_recycle = recycle_tx.clone();
     let serial_handle = thread::spawn(move || -> Result<ModuleState, BlockParseError> {
         let mut modules = ModuleFactory::create_modules(&serial_config);
         let mut seq = Sequence::empty();
@@ -158,6 +174,7 @@ fn process_fastq_blocks(
                     module.process_sequence(&seq);
                 }
             }
+            let _ = serial_recycle.send(block);
         }
         // Read counts come from the pool workers; this instance would
         // double them.
@@ -168,6 +185,7 @@ fn process_fastq_blocks(
     for _ in 0..num_workers {
         let rx = block_rx.clone();
         let worker_config = config.clone();
+        let worker_recycle = recycle_tx.clone();
         let handle = thread::spawn(move || -> Result<ModuleState, BlockParseError> {
             let mut modules = ModuleFactory::create_modules(&worker_config);
             let mut count: u64 = 0;
@@ -195,6 +213,7 @@ fn process_fastq_blocks(
                     }
                     count += 1;
                 }
+                let _ = worker_recycle.send(block);
             }
             Ok((modules, count))
         });
