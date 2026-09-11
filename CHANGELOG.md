@@ -6,35 +6,54 @@ All notable changes to RastQC are documented here.
 
 ### Performance
 
-Measured on a public 4.3M-read HiSeq run (ERR5897746_1, 320 MB gzipped),
-median of 6 runs, against 0.2.0 on the same machine. Output is byte-identical
-to 0.2.0 at every thread count — verified by diffing `fastqc_data.txt` between
-a 0.2.0 `-t 1` run and a `-t 4` run of this build.
+Measured against 0.2.0 on the same machine (Intel Core i9-9900K, 8C/16T,
+macOS 15 x86-64), median of repeated runs, peak RSS via `/usr/bin/time -l`.
+Reported values are unchanged: `fastqc_data.txt` from a 0.2.0 `-t 1` run
+matches this build at `-t 4` and `-t 16` byte for byte, on both a short-read
+and a long-read file.
 
-| | 0.2.0 | this build | |
-|---|---|---|---|
-| wall, `-t 1` | 4.39 s | **3.96 s** | 1.11x |
-| wall, `-t 4` | 2.90 s | **2.54 s** | 1.14x |
-| system time, `-t 4` | 0.43 s | **0.12 s** | 3.6x less |
-| peak RSS, `-t 1` | 114 MB | **71 MB** | |
-| peak RSS, `-t 4` | 148 MB | **74 MB** | |
-| peak RSS, `-t 16` | 142 MB | **78 MB** | |
+Short-read, ERR5897746_1 (4.3M reads, 126 bp, 320 MB gzipped):
 
-Peak memory roughly halves and is now essentially flat across `-t`, because
-the working set is a small pool of reused buffers rather than a churn of
-1 MB allocations whose peak depended on how many were in flight at once.
+| | 0.2.0 | this build |
+|---|---|---|
+| wall, `-t 1` | 4.39 s | **3.96 s** |
+| wall, `-t 4` | 2.90 s | **2.54 s** |
+| system time, `-t 4` | 0.43 s | **0.12 s** |
+| peak RSS, `-t 4` | 148 MB | **74 MB** |
+| peak RSS, `-t 16` | 142 MB | **78 MB** |
+
+Long-read, DRR242198_1 (75.8k ONT reads, 5.9 kb mean, 100.6 kb max, 406 MB):
+
+| | 0.2.0 | this build |
+|---|---|---|
+| peak RSS, `-t 1` | 403 MB | 401 MB |
+| peak RSS, `-t 4` | 979 MB | **413 MB** |
+| peak RSS, `-t 16` | 1004 MB | **395 MB** |
 
 - **The block reader now recycles its buffers.** It allocated a fresh 1 MB
   `Vec` for every block and dropped it once both consumers were done, so each
-  megabyte of input cost an `mmap` and a `madvise` teardown — which profiled as
-  the single largest cost in a run, above every QC module. Finished blocks are
-  now returned to the reader and refilled. This is where the 3.5x drop in
-  system time comes from.
+  megabyte of input cost an `mmap` and a `madvise` teardown — which profiled
+  as the single largest cost in a run, above every QC module. Finished blocks
+  are now returned to the reader and refilled. This is where the 3.6x drop in
+  system time and roughly half the peak memory come from.
 - **The block buffer no longer reallocates on every block.** `next_block`
-  fills in 128 KB chunks and stops once it has passed `BLOCK_SIZE`, so the last
-  chunk pushed the length just past a capacity of exactly `BLOCK_SIZE` — a
-  realloc and a 1 MB copy per block. Buffers are now allocated with room for
-  that overshoot.
+  fills in 128 KB chunks and stops once it has passed `BLOCK_SIZE`, so the
+  last chunk pushed the length just past a capacity of exactly `BLOCK_SIZE` —
+  a realloc and a 1 MB copy per block. Buffers now have room for the
+  overshoot.
+- **Long-read runs no longer get worse as `-t` rises.** The per-file worker
+  cap 0.2.0 introduced keyed off the filename extension alone, so long-read
+  input still got 4 workers (gzipped) or 8 (plain). Per sequence GC content
+  keeps one GC model per distinct read length and a model for length *L*
+  holds *L+1* inner vectors, so every worker built its own set — Illumina has
+  one length and one model, an ONT run buckets to ~100 lengths and millions
+  of vectors — while the reader thread stayed the ceiling. At `-t 4` that was
+  *slower* than `-t 1` (2.64 s vs 2.37 s) for 2.5x the memory. The cap now
+  samples mean read length from the first block and gives such files one
+  worker; the rest of the budget goes to other files. A 282 MB PacBio run
+  drops from 465 MB to 198 MB at `-t 4`. Short-read files are untouched and
+  still scale with `-t`. The deeper fix is to share those models between
+  workers rather than rebuild them.
 - **Per sequence quality scores** walked every quality string twice, once for
   the run's minimum character and once for the read's sum. The two are now one
   pass, and its per-read counter table is a flat array indexed by the mean
@@ -45,28 +64,6 @@ the working set is a small pool of reused buffers rather than a churn of
   megabases, and an array indexed by length would reintroduce the memory
   blowup 0.2.0 fixed.
 
-- **Long-read runs no longer get worse as `-t` rises.** The per-file worker
-  cap 0.2.0 introduced keyed off the filename extension alone, so long-read
-  input still got up to 4 or 8 workers. Per sequence GC content keeps one GC
-  model per distinct read length and each model's size grows with that
-  length, so every worker built its own set — hundreds of MB apiece on long
-  reads — while the reader thread stayed the ceiling. Measured on a 406 MB
-  ONT run (75.8k reads, 5.9 kb mean, 100.6 kb max), before:
-
-  | `-t` | wall | peak RSS |
-  |---|---|---|
-  | 1 | 2.37 s | 403 MB |
-  | 4 | 2.64 s | 979 MB |
-  | 16 | 2.67 s | 1004 MB |
-
-  More workers were slower *and* cost 2.5x the memory. The cap now samples
-  the mean read length from the first block and gives long-read files one
-  worker, leaving the rest of the budget for other files. After the change
-  peak RSS is flat at ~400 MB across `-t 1`, `-t 4` and `-t 16`, and a
-  282 MB PacBio run drops from 465 MB to 198 MB at `-t 4`. Worker count has
-  not affected reported values since 0.2.0, and `fastqc_data.txt` from a
-  0.2.0 `-t 1` run matches this build at `-t 16` exactly.
-
 ### Added
 
 - `benchmark/check_concordance.sh` — runs FastQC as the reference and compares
@@ -75,20 +72,30 @@ the working set is a small pool of reused buffers rather than a churn of
   the repository, so the one number that most matters for a drop-in
   replacement could not be reproduced. It exits non-zero on any disagreement,
   so it also works as a gate.
+- A CI job that syntax-checks and shellchecks the benchmark scripts. They
+  produce the numbers in `RESULTS.md` and the paper, but nothing checked them,
+  and two breakages this cycle would have been caught by it.
 
 ### Changed
 
 - `benchmark/fetch_data.sh` now fetches every dataset the benchmarks and the
-  paper use, verifies each against the byte size ENA reports, and downloads
-  large files as concurrent byte ranges. ENA throttles a single connection to
-  roughly 200 KB/s, which is over five hours for the full set; twelve ranges
-  measured ~2 MB/s.
+  paper cite, verifies each against the byte size ENA reports, and downloads
+  large files as concurrent byte ranges that resume from their partial offset.
+  ENA throttles a single connection to roughly 200 KB/s, which is over five
+  hours for the full set; twelve ranges measured ~2 MB/s.
 - `benchmark/run_benchmark.sh` classifies long-read inputs by their measured
   mean read length instead of by filename. The previous `*_ont_*`/`*_pacbio_*`
-  convention silently benchmarked real ENA files as short-read, and it now
-  emits stable tool ids that `paper/analyze_benchmarks.py` matches on — the two
-  had drifted apart, so the figures were being generated from no data.
+  convention silently benchmarked real ENA files as short-read, and the script
+  now emits stable tool ids that `paper/analyze_benchmarks.py` matches on —
+  the two had drifted apart, so the figures were being generated from no data.
 - Both benchmark scripts now run on bash 3.2, which is what macOS ships.
+
+### Fixed
+
+- The agent skill (`RastQC.md`) told users to install with "requires Rust
+  1.70+", and its Nextflow gate example tested `[ $? -eq 2 ]` — which passes
+  an unreadable or malformed file through the gate, the exact case exit code 3
+  exists to stop.
 
 ## [0.2.0] — 2026-09-10
 
