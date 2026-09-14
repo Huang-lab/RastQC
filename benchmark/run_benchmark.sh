@@ -6,8 +6,9 @@ set -euo pipefail
 # ============================================================
 #
 # Measures wall time and peak resident memory for each tool on every FASTQ in
-# the data directory, repeating each measurement and reporting the median wall
-# time and the peak RSS across repetitions.
+# the data directory, repeating each measurement and reporting the fastest wall
+# time and the peak RSS across repetitions (see the note in bench() for why
+# the fastest rather than the median).
 #
 # FastQC and Falco are optional: whichever are found on PATH (or pointed at by
 # $FASTQC / $FALCO) are included, and the rest are skipped. Only RastQC is
@@ -196,9 +197,19 @@ bench() {
         rm -f "$timefile"
     done
 
-    # Median wall time (robust to one slow run), peak RSS across repetitions.
+    # Fastest wall time, peak RSS across repetitions.
+    #
+    # The minimum, not the median. Contention is one-sided: another process
+    # competing for CPU or I/O can only ever make a run slower, never faster,
+    # so the fastest observed run is the best estimate of what the tool costs
+    # uncontended, and it is the figure least sensitive to whatever else the
+    # machine happened to be doing. On this project's own hardware a median of
+    # 3 produced a 5x outlier for one tool on one file and a 40x outlier on
+    # another, because the interference outlasted two of the three repetitions
+    # — a median cannot survive that, a minimum can. Compare across two
+    # independent runs before publishing regardless.
     local wall rss
-    wall=$(printf '%s\n' "${walls[@]}" | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}')
+    wall=$(printf '%s\n' "${walls[@]}" | sort -n | head -1)
     rss=$(printf '%s\n' "${rsss[@]}" | sort -n | awk 'END{print $1}')
 
     printf '  %-24s %8ss  %6s MB\n' "$tool" "$wall" "$rss"
