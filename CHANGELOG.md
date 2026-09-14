@@ -54,6 +54,13 @@ Long-read, DRR242198_1 (75.8k ONT reads, 5.9 kb mean, 100.6 kb max, 406 MB):
   drops from 465 MB to 198 MB at `-t 4`. Short-read files are untouched and
   still scale with `-t`. The deeper fix is to share those models between
   workers rather than rebuild them.
+- **Quality Stratified Length** widened every base to `f64` and accumulated
+  the read's quality sum in floating point. It now sums as an integer and
+  converts once — exact rather than accumulating rounding error over hundreds
+  of thousands of bases, and faster: `--long-read` on a 282 MB PacBio run
+  drops from 3.84 s to 3.38 s, and on a 406 MB ONT run from 3.08 s to 2.81 s.
+  This loop matters more than most per-base arithmetic because it walks the
+  whole read, where the per-position modules stop at 1000 bases.
 - **Per sequence quality scores** walked every quality string twice, once for
   the run's minimum character and once for the read's sum. The two are now one
   pass, and its per-read counter table is a flat array indexed by the mean
