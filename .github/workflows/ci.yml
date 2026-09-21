@@ -69,9 +69,10 @@ jobs:
           # SC2086 (word splitting) is deliberate for $TIME_FLAG and friends.
           # SC2218 is a false positive on run_benchmark.sh as of shellcheck
           # 0.11: it reports file_stats and stat_of as "defined later" when
-          # both are defined at top level well before every use (lines 78 and
-          # 108, first used at 126 and 205). Re-check whether it still fires
-          # before assuming a future SC2218 report is also spurious.
+          # both are defined at top level well before any use. Line numbers
+          # are deliberately not cited here, since they drift. Re-check that
+          # it still fires before assuming a future SC2218 report is also
+          # spurious.
           shellcheck -e SC2086,SC2218 benchmark/*.sh
 
       - name: Byte-compile the figure script

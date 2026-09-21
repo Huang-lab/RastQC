@@ -165,7 +165,18 @@ fetch_file() {
                      "$url" >> "$cf" &
                 pids+=($!)
             done
-            for i in "${pids[@]:-}"; do [ -n "$i" ] && wait "$i" || true; done
+            # Wait for every range fetch. A curl that failed or stalled is
+            # not fatal here: each chunk is re-verified below and the retry
+            # loop replaces whatever is still short. `"${pids[@]:-}"` yields a
+            # single empty element when no chunk needed fetching — an unguarded
+            # expansion of an empty array is an error under `set -u` on the
+            # bash 3.2 macOS ships — so skip that element rather than waiting
+            # on it. Written as three lines because `A && B || C` reads as
+            # if-then-else and is not one (shellcheck SC2015).
+            for i in "${pids[@]:-}"; do
+                [ -n "$i" ] || continue
+                wait "$i" || true
+            done
 
             # Re-verify every chunk; retry only what is still short.
             local ok=1
