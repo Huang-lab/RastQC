@@ -7,7 +7,9 @@ All notable changes to RastQC are documented here.
 ### Performance
 
 Measured against 0.2.0 on the same machine (Intel Core i9-9900K, 8C/16T,
-macOS 15 x86-64), median of repeated runs, peak RSS via `/usr/bin/time -l`.
+macOS 15 x86-64), repeated runs, peak RSS via `/usr/bin/time -l`. The harness
+changed which statistic it reports partway through this cycle (see Changed), so
+re-measure this table under one harness version before tagging the release.
 Reported values are unchanged: `fastqc_data.txt` from a 0.2.0 `-t 1` run
 matches this build at `-t 4` and `-t 16` byte for byte, on both a short-read
 and a long-read file.
@@ -82,6 +84,18 @@ Long-read, DRR242198_1 (75.8k ONT reads, 5.9 kb mean, 100.6 kb max, 406 MB):
 - A CI job that syntax-checks and shellchecks the benchmark scripts. They
   produce the numbers in `RESULTS.md` and the paper, but nothing checked them,
   and two breakages this cycle would have been caught by it.
+- [`benchmark/DATA.md`](benchmark/DATA.md) — what every benchmark and
+  validation dataset actually is: accession, organism, platform, and read
+  counts and lengths *measured from the files* rather than taken from ENA
+  metadata, whose `base_count` is per spot for some runs and per file for
+  others. Dividing those two fields is how the README came to describe an
+  18.7M-read NextSeq run as 144 bp when it is 72 bp. It also records that
+  three files in the 0.1.0 paper's dataset are not what their names say — a
+  second mouse run named `fly`, SARS-CoV-2 amplicon data named `yeast`, and a
+  196-byte failed download named `zebrafish` — so the paper's "five model
+  organisms" were three, with mouse counted twice. Which module calls match
+  FastQC does not depend on the species, so the concordance result stands;
+  only the description of the validation set was wrong.
 
 ### Changed
 
@@ -96,6 +110,28 @@ Long-read, DRR242198_1 (75.8k ONT reads, 5.9 kb mean, 100.6 kb max, 406 MB):
   now emits stable tool ids that `paper/analyze_benchmarks.py` matches on —
   the two had drifted apart, so the figures were being generated from no data.
 - Both benchmark scripts now run on bash 3.2, which is what macOS ships.
+- `benchmark/run_benchmark.sh` reports the **fastest** of its repetitions
+  rather than the median. Timing interference on this machine is one-sided and
+  occasionally outlasts two of three repetitions — one FastQC measurement came
+  out 47.7 s / 242 s / 47.7 s, and isolated repeats of the 242 s outlier gave
+  47.7 s — which a median cannot survive and a minimum can. Peak RSS over the
+  same runs agreed within 15% on 42 of 45 measurements, so only wall time was
+  affected. The paper's figures are regenerated from the CSV and so already use
+  it; `benchmark/RESULTS.md` still carries 0.2.0's median-of-3 numbers and says
+  so.
+- `benchmark/fetch_data.sh` gained a `human` group: one full 30X human WGS run
+  (ERR3239334, 12 GB). It is the only group that takes hours rather than
+  minutes, so `short long` remains the way to cover every platform and three
+  orders of magnitude of size without it. `all` now includes it, and is ~16 GB.
+- The two Bioconda recipes are now one multi-output recipe at
+  [`recipes/rastqc-meta/`](recipes/rastqc-meta/), mirroring
+  [bioconda-recipes#69452](https://github.com/bioconda/bioconda-recipes/pull/69452).
+  `rastqc` and `rastqc-nanopore` are the same program from the same tag with
+  different cargo features and are always released together, so two recipes
+  meant two version bumps and two `sha256` edits per release — 0.2.0 produced
+  two autobump PRs plus one maintainer PR for one tag. The staging copy here is
+  byte-identical to what is live, which is the check that 0.2.0's dropped
+  `additional-platforms` taught us to run first.
 
 ### Fixed
 
@@ -103,6 +139,36 @@ Long-read, DRR242198_1 (75.8k ONT reads, 5.9 kb mean, 100.6 kb max, 406 MB):
   1.70+", and its Nextflow gate example tested `[ $? -eq 2 ]` — which passes
   an unreadable or malformed file through the gate, the exact case exit code 3
   exists to stop.
+- `benchmark/run_benchmark.sh` looked up per-file stats with a tab-delimited
+  parse of a space-delimited table, so every lookup returned nothing: the CSV
+  that feeds `RESULTS.md` and the paper's figures got empty `size_mb`, `reads`
+  and `mean_read_len` columns, the per-file headers printed blanks, and
+  `$((total_mb + $(stat_of ...)))` became an arithmetic syntax error that
+  killed the aggregate-group rows outright under `set -e`. Both the table and
+  the lookup are now tab-delimited, which was the point of the change — a
+  filename containing a space stays in one field.
+- `benchmark/run_benchmark.sh` skips an input it cannot read as FASTQ instead
+  of benchmarking it. A truncated or non-gzip file still lets `awk` reach `END`
+  and report zero reads, which memoized a 0 bp mean under a cache key of
+  `basename:size` — permanently classifying the file as short-read, so its
+  long-read rows silently vanished — and timed each tool's error path as if it
+  were a wall time.
+- `benchmark/fetch_data.sh` records the chunk layout a partial download was
+  written under, and refuses to resume chunks that carry no recorded layout
+  rather than guessing. Chunk boundaries derive from `$PARALLEL`; resuming
+  under a different value appends bytes from the new layout onto bytes from the
+  old one, and every chunk still reaches its expected length, so the total size
+  check passes and the file is silently corrupt in the middle. Which layout
+  produced an unlabelled chunk dir cannot be recovered from the chunks — a
+  chunk that was complete under a larger `$PARALLEL` is shorter than its range
+  under a smaller one, and so is indistinguishable from a partial one.
+- Read lengths in the documentation, all now measured from the files:
+  DRR045135_1 is 72 bp (was 144), DRR048760 is 67 bp (was 76, a
+  transposition), and the paper's dataset tables described DRR609229 as a fixed
+  76 bp when it is variable (83/84 bp mean, 35–151), the ONT run as 5,347 bp
+  when it is 5,920, and the PacBio run as 18,814 bp when it is 17,609 — that
+  column had been filled in with the N50. The N50 and median figures in the
+  paper's text were checked against the tool's own output and are correct.
 
 ## [0.2.0] — 2026-09-10
 
