@@ -107,14 +107,17 @@ All benchmarks were performed on a single workstation:
 
 ### Short-Read Datasets
 
-We benchmarked on real human whole-exome sequencing data from the European Nucleotide Archive (Table 2).
+We benchmarked on real human whole-exome sequencing data from the European
+Nucleotide Archive (Table 2). Read counts and lengths are measured from the
+files rather than taken from ENA metadata, whose `base_count` is per spot for
+some runs and per file for others; see `benchmark/DATA.md`.
 
 **Table 2.** Short-read datasets used for benchmarking.
 
-| File | Accession | Reads | Read Length | File Size |
+| File | Accession | Reads | Read Length (measured) | File Size |
 |------|-----------|-------|-------------|-----------|
-| DRR609229 R1 | DRR609229 | 719,828 | 76 bp | 22 MB |
-| DRR609229 R2 | DRR609229 | 719,828 | 76 bp | 23 MB |
+| DRR609229 R1 | DRR609229 | 719,828 | 83 bp mean (35–151) | 22 MB |
+| DRR609229 R2 | DRR609229 | 719,828 | 84 bp mean (35–151) | 23 MB |
 | ERR5897746 R1 | ERR5897746 | 4,252,217 | 126 bp | 320 MB |
 | ERR5897746 R2 | ERR5897746 | 4,252,217 | 126 bp | 327 MB |
 | DRR013000 R1 | DRR013000 | 24,778,423 | 76 bp | 1,430 MB |
@@ -125,10 +128,10 @@ We additionally benchmarked on long-read bacterial sequencing data to evaluate p
 
 **Table 3.** Long-read datasets used for benchmarking.
 
-| File | Platform | Accession | Reads | Mean Length | File Size |
+| File | Platform | Accession | Reads | Mean Length (measured) | File Size |
 |------|----------|-----------|-------|-------------|-----------|
-| E. coli ONT | MinION | DRR242198 | 75,766 | 5,347 bp | 406 MB |
-| E. coli PacBio | Revio | DRR723651 | 41,996 | 18,814 bp | 281 MB |
+| E. coli ONT | MinION | DRR242198 | 75,766 | 5,920 bp | 406 MB |
+| E. coli PacBio | Revio | DRR723651 | 41,996 | 17,609 bp | 282 MB |
 
 ### Metrics
 
