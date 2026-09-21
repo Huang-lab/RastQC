@@ -58,7 +58,7 @@ jobs:
 
       - name: Syntax-check shell scripts
         run: |
-          for f in benchmark/*.sh recipes/*/build.sh; do
+          for f in benchmark/*.sh recipes/*/build*.sh; do
             echo "checking $f"
             bash -n "$f"
           done

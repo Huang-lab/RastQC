@@ -25,7 +25,8 @@ conda install -c bioconda rastqc
 conda install -c bioconda rastqc-nanopore
 ```
 
-The Bioconda recipe lives in [`recipes/rastqc/`](recipes/rastqc/).
+Both packages are built from one multi-output Bioconda recipe, which lives in
+[`recipes/rastqc-meta/`](recipes/rastqc-meta/).
 
 ### From source
 
