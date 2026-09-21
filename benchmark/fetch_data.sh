@@ -10,8 +10,13 @@ set -euo pipefail
 #
 #   ./benchmark/fetch_data.sh short   # ~3.0 GB, 7 Illumina runs
 #   ./benchmark/fetch_data.sh long    # ~0.7 GB, ONT + PacBio
-#   ./benchmark/fetch_data.sh all     # everything below (~3.7 GB)
+#   ./benchmark/fetch_data.sh human   # 12 GB, one full 30X human WGS run
 #   ./benchmark/fetch_data.sh nextseq # just the issue #12 reproducer (828 MB)
+#   ./benchmark/fetch_data.sh all     # everything below (~16 GB)
+#
+# The `human` group is a single 12 GB file and is the only one that takes
+# hours rather than minutes, both to fetch and to benchmark. `short long`
+# covers every platform and three orders of magnitude of size without it.
 #
 # Then: ./benchmark/run_benchmark.sh
 #
@@ -56,15 +61,17 @@ DATASETS=(
   "nextseq|DRR048760.fastq.gz|56324213|https://ftp.sra.ebi.ac.uk/vol1/fastq/DRR048/DRR048760/DRR048760.fastq.gz|NextSeq 500, 1.2M reads — small single-end run"
   "long|DRR242198_1.fastq.gz|425771068|https://ftp.sra.ebi.ac.uk/vol1/fastq/DRR242/DRR242198/DRR242198_1.fastq.gz|ONT MinION, 76k reads, ~5.9 kb mean"
   "long|DRR723651_subreads.fastq.gz|295266620|https://ftp.sra.ebi.ac.uk/vol1/fastq/DRR723/DRR723651/DRR723651_subreads.fastq.gz|PacBio Revio, 42k reads, ~17.6 kb mean"
+  "human|ERR3239334_1.fastq.gz|13021167175|https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR323/004/ERR3239334/ERR3239334_1.fastq.gz|NovaSeq 6000, 30X human WGS (1000 Genomes) — full-scale case, 12 GB"
 )
 
 case "$SET" in
     short)   WANT=("short") ;;
     long)    WANT=("long") ;;
+    human)   WANT=("human") ;;
     nextseq) WANT=("nextseq") ;;
-    all)     WANT=("short" "nextseq" "long") ;;
+    all)     WANT=("short" "nextseq" "long" "human") ;;
     *)
-        echo "Unknown dataset group '$SET' (expected short, long, nextseq or all)" >&2
+        echo "Unknown dataset group '$SET' (expected short, long, human, nextseq or all)" >&2
         exit 1
         ;;
 esac
@@ -88,7 +95,44 @@ fetch_file() {
              -o "$out.part" "$url" || return 1
     else
         local chunkdir="$out.chunks"
+        local layout="$bytes:$PARALLEL"
+
+        # Chunk boundaries are derived from $PARALLEL, but the partial chunks
+        # already on disk were written under whatever $PARALLEL the interrupted
+        # run used. Resuming with a different value would append bytes from the
+        # new layout onto bytes from the old one: every chunk would still reach
+        # its expected length, the total would still equal $bytes, the size
+        # check below would pass, and the file would be silently corrupt in the
+        # middle. Record the layout each set of chunks was written under and
+        # start the file over if it no longer matches.
+        if [ -f "$chunkdir/.layout" ]; then
+            local had
+            had=$(cat "$chunkdir/.layout")
+            if [ "$had" != "$layout" ]; then
+                echo "  chunk layout changed ($had -> $layout); refetching this file"
+                rm -rf "$chunkdir"
+            fi
+        elif [ -d "$chunkdir" ]; then
+            # A chunk dir from before the layout was recorded. Which layout
+            # produced it cannot be recovered from the chunks: a chunk that was
+            # complete under a larger $PARALLEL is *shorter* than its range
+            # under a smaller one, so it is indistinguishable from a partial
+            # chunk and would be resumed from the wrong offset. Stamping the
+            # current layout on it would bless exactly the corruption the
+            # recorded layout exists to prevent. Refuse rather than guess —
+            # and rather than delete, since the bytes are still usable to
+            # whoever knows how they were fetched.
+            echo "  $name has partial chunks with no recorded layout." >&2
+            echo "  Resuming them under PARALLEL=$PARALLEL could silently corrupt the file." >&2
+            echo "  Discard them:" >&2
+            echo "      rm -rf '$chunkdir'" >&2
+            echo "  or, if you know they were fetched with PARALLEL=$PARALLEL, adopt them:" >&2
+            echo "      printf '%s' '$layout' > '$chunkdir/.layout'" >&2
+            return 1
+        fi
         mkdir -p "$chunkdir"
+        printf '%s' "$layout" > "$chunkdir/.layout"
+
         local csize=$(( (bytes + PARALLEL - 1) / PARALLEL ))
 
         local attempt
@@ -177,8 +221,14 @@ for row in "${DATASETS[@]}"; do
             echo "ok       $name  ($desc)"
             continue
         fi
-        echo "resuming $name — have $have bytes, expected $bytes"
-        mv "$out" "$out.part"
+        if [ "$bytes" -lt "$CHUNK_MIN_BYTES" ] || [ "$PARALLEL" -le 1 ]; then
+            echo "resuming $name — have $have bytes, expected $bytes"
+            mv "$out" "$out.part"
+        else
+            # The chunked path resumes from $out.chunks, not from $out.part.
+            echo "discarding wrong-sized $name — have $have bytes, expected $bytes"
+            rm -f "$out"
+        fi
     fi
 
     echo "fetching $name  ($desc)"
