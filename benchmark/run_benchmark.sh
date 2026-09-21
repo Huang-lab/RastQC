@@ -76,25 +76,46 @@ fi
 STATS_CACHE="$DATADIR/.benchmark_stats"
 touch "$STATS_CACHE"
 
+# The stats tables below are tab-delimited, so that a filename containing a
+# space stays in one field. Spelled $'\t' rather than a literal tab because a
+# literal one is invisible here and does not survive casual reformatting.
+TAB=$'\t'
+
+# Emits "<reads>\t<meanlen>", or nothing at all if the file could not be read.
+# Fields are tab-separated and matched on an exact field rather than by
+# substring: a filename may contain spaces, and `grep -F "$key "` also matched
+# one file's cache line when another file's name was a suffix of it and the two
+# happened to be the same size.
 file_stats() {
     local f="$1"
     local bytes key hit
     bytes=$(wc -c <"$f" | tr -d ' ')
     key="$(basename "$f"):$bytes"
 
-    hit=$(grep -F "$key " "$STATS_CACHE" 2>/dev/null | head -1 || true)
+    hit=$(awk -F'\t' -v k="$key" '$1==k {print $2"\t"$3; exit}' "$STATS_CACHE" 2>/dev/null || true)
     if [ -n "$hit" ]; then
-        echo "${hit#"$key" }"
-        return
+        printf '%s' "$hit"
+        return 0
     fi
 
-    local stats
+    local stats rc=0
     case "$f" in
-        *.gz) stats=$(gzip -dc "$f" | awk 'NR%4==2 {n++; b+=length($0)} END{printf "%d %.0f", n, (n?b/n:0)}') ;;
-        *)    stats=$(awk 'NR%4==2 {n++; b+=length($0)} END{printf "%d %.0f", n, (n?b/n:0)}' "$f") ;;
+        *.gz) stats=$(gzip -dc "$f" 2>/dev/null | awk 'NR%4==2 {n++; b+=length($0)} END{printf "%d\t%.0f", n, (n?b/n:0)}') || rc=$? ;;
+        *)    stats=$(awk 'NR%4==2 {n++; b+=length($0)} END{printf "%d\t%.0f", n, (n?b/n:0)}' "$f") || rc=$? ;;
     esac
-    echo "$key $stats" >> "$STATS_CACHE"
-    echo "$stats"
+
+    # A truncated or non-gzip file still lets awk reach END and print "0 0".
+    # Memoizing that would permanently misclassify the file — 0 bp mean reads
+    # as short-read, so its long-read rows silently vanish — and the cache key
+    # is basename:size, so it would never be recomputed. Only cache a pass that
+    # actually saw records.
+    local n=${stats%%"$TAB"*}
+    if [ "$rc" -ne 0 ] || [ -z "$n" ] || [ "$n" -eq 0 ]; then
+        return 1
+    fi
+
+    printf '%s\t%s\n' "$key" "$stats" >> "$STATS_CACHE"
+    printf '%s' "$stats"
 }
 
 # ---- Classify files by measured read length ----
@@ -107,7 +128,11 @@ LONG_FILES=()
 FILE_STATS=""
 
 stat_of() {  # stat_of <name> <1=reads|2=meanlen|3=size_mb>
-    printf '%s\n' "$FILE_STATS" | awk -v n="$1" -v c="$2" '$1==n {print $(c+1); exit}'
+    # Tab-delimited and matched on the whole first field: awk's default
+    # whitespace splitting made every lookup for a filename containing a space
+    # return nothing, which turned `$((total_mb + $(stat_of ...)))` into a
+    # syntax error and silently dropped the ALL_SHORT aggregate row.
+    printf '%s' "$FILE_STATS" | awk -F'\t' -v n="$1" -v c="$2" '$1==n {print $(c+1); exit}'
 }
 
 shopt -s nullglob
@@ -124,9 +149,16 @@ echo "Scanning ${#CANDIDATES[@]} input file(s) for read count and mean length...
 for f in "${CANDIDATES[@]}"; do
     [ -f "$f" ] || continue
     fname=$(basename "$f")
-    read -r nreads meanlen <<<"$(file_stats "$f")"
+    # file_stats fails rather than reporting zero reads for a file it could not
+    # read. Benchmarking it anyway would time each tool's error path and record
+    # that as a wall time, so drop it here and say so.
+    if ! stats=$(file_stats "$f"); then
+        printf '  %-34s SKIPPED — not readable as FASTQ (truncated, or not gzip)\n' "$fname" >&2
+        continue
+    fi
+    read -r nreads meanlen <<<"$stats"
     size_mb=$(awk -v b="$(wc -c <"$f")" 'BEGIN{printf "%.0f", b/1048576}')
-    FILE_STATS="$FILE_STATS$fname $nreads $meanlen $size_mb
+    FILE_STATS="$FILE_STATS$fname$TAB$nreads$TAB$meanlen$TAB$size_mb
 "
 
     if [ "$meanlen" -ge "$LONG_READ_MIN_MEAN_LEN" ]; then
@@ -139,6 +171,12 @@ for f in "${CANDIDATES[@]}"; do
     printf '  %-34s %10s reads  %6s bp mean  %5s MB  -> %s\n' \
         "$fname" "$nreads" "$meanlen" "$size_mb" "$kind"
 done
+
+if [ ${#SHORT_FILES[@]} -eq 0 ] && [ ${#LONG_FILES[@]} -eq 0 ]; then
+    echo "ERROR: none of the ${#CANDIDATES[@]} file(s) in $DATADIR could be read as FASTQ" >&2
+    echo "Re-fetch them: ./benchmark/fetch_data.sh all" >&2
+    exit 1
+fi
 
 echo "=============================================="
 echo "  RastQC benchmark"
@@ -257,7 +295,7 @@ run_group() {
         total_mb=$((total_mb + $(stat_of "$b" 3)))
         total_reads=$((total_reads + $(stat_of "$b" 1)))
     done
-    FILE_STATS="$FILE_STATS$label $total_reads 0 $total_mb
+    FILE_STATS="$FILE_STATS$label$TAB$total_reads${TAB}0$TAB$total_mb
 "
 
     echo ""
