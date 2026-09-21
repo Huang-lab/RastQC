@@ -23,6 +23,17 @@ use std::io::{self, Read};
 /// worker already carries.
 pub const BLOCK_SIZE: usize = 1024 * 1024;
 
+/// A buffer sized for one call to [`FastqBlockReader::next_block`].
+///
+/// The extra `READ_CHUNK` matters: `next_block` fills the buffer a chunk at a
+/// time and stops once it has reached `BLOCK_SIZE`, so the final chunk almost
+/// always pushes the length just past it. At exactly `BLOCK_SIZE` capacity
+/// that overshoot reallocated and copied the whole megabyte on essentially
+/// every block.
+pub fn new_block_buffer() -> Vec<u8> {
+    Vec::with_capacity(BLOCK_SIZE + READ_CHUNK)
+}
+
 /// Bytes requested per `read` call while filling a block.
 const READ_CHUNK: usize = 128 * 1024;
 
@@ -123,7 +134,7 @@ impl FastqBlockReader {
 
             // Nothing complete in hand yet.
             if self.eof {
-                if !trim_ascii(buf).is_empty() {
+                if !buf.trim_ascii().is_empty() {
                     eprintln!("Warning: File truncated mid-record. Skipping last partial record.");
                 }
                 buf.clear();
@@ -197,7 +208,7 @@ impl<'a> Iterator for RecordIter<'a> {
         // Blank lines between records are tolerated ahead of a header, as the
         // per-record reader does.
         let header = loop {
-            let line = trim_ascii(self.next_line()?);
+            let line = self.next_line()?.trim_ascii();
             if !line.is_empty() {
                 break line;
             }
@@ -209,12 +220,12 @@ impl<'a> Iterator for RecordIter<'a> {
             ))));
         }
 
-        let Some(sequence) = self.next_line().map(trim_ascii) else {
+        let Some(sequence) = self.next_line().map(|l| l.trim_ascii()) else {
             return Some(Err(BlockParseError(
                 "File truncated during sequence read".into(),
             )));
         };
-        let Some(separator) = self.next_line().map(trim_ascii) else {
+        let Some(separator) = self.next_line().map(|l| l.trim_ascii()) else {
             return Some(Err(BlockParseError(
                 "File truncated during separator read".into(),
             )));
@@ -225,7 +236,7 @@ impl<'a> Iterator for RecordIter<'a> {
                 String::from_utf8_lossy(separator)
             ))));
         }
-        let Some(quality) = self.next_line().map(trim_ascii) else {
+        let Some(quality) = self.next_line().map(|l| l.trim_ascii()) else {
             return Some(Err(BlockParseError(
                 "File truncated during quality score read".into(),
             )));
@@ -247,32 +258,40 @@ impl<'a> Iterator for RecordIter<'a> {
     }
 }
 
-/// `[u8]::trim_ascii`, which is newer than this crate's MSRV (Rust 1.70).
-///
-/// Matches the `str::trim` the per-record reader applies to every line, so
-/// `\r\n` line endings and stray padding are handled identically here.
-pub(crate) fn trim_ascii(mut s: &[u8]) -> &[u8] {
-    while let [first, rest @ ..] = s {
-        if first.is_ascii_whitespace() {
-            s = rest;
-        } else {
-            break;
-        }
-    }
-    while let [rest @ .., last] = s {
-        if last.is_ascii_whitespace() {
-            s = rest;
-        } else {
-            break;
-        }
-    }
-    s
-}
-
 /// Non-UTF-8 bytes in a header are a hard error, as on the per-record reader.
 pub(crate) fn header_str(header: &[u8]) -> Result<&str, BlockParseError> {
     std::str::from_utf8(header)
         .map_err(|e| BlockParseError(format!("FASTQ header is not valid UTF-8: {e}")))
+}
+
+/// Mean sequence length over the records in the first block, or `None` when
+/// that cannot be determined (unreadable, empty, or not parseable as blocks).
+///
+/// Used only to size the worker pool, so a rough figure from the head of the
+/// file is enough and a wrong answer costs throughput, never correctness.
+pub fn sample_mean_read_length(path: &std::path::Path) -> Option<usize> {
+    let mut reader = FastqBlockReader::new(super::fastq::open_decompressed(path).ok()?);
+    let mut buf = new_block_buffer();
+    if !reader.next_block(&mut buf).ok()? {
+        return None;
+    }
+
+    let mut records = 0usize;
+    let mut total = 0usize;
+    for record in RecordIter::new(&buf) {
+        let record = record.ok()?;
+        total += record.sequence.len();
+        records += 1;
+        // One block of a long-read file holds only a handful of records, and
+        // a short-read one holds thousands; this bound keeps the short-read
+        // case from walking the whole block for an answer it had after the
+        // first few hundred.
+        if records >= 1000 {
+            break;
+        }
+    }
+
+    (records > 0).then(|| total / records)
 }
 
 /// Whether the first record of `path` looks like SOLiD colorspace.

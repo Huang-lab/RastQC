@@ -25,7 +25,8 @@ conda install -c bioconda rastqc
 conda install -c bioconda rastqc-nanopore
 ```
 
-The Bioconda recipe lives in [`recipes/rastqc/`](recipes/rastqc/).
+Both packages are built from one multi-output Bioconda recipe, which lives in
+[`recipes/rastqc-meta/`](recipes/rastqc-meta/).
 
 ### From source
 
@@ -294,15 +295,18 @@ Two comparisons, measured differently — read both.
 Intel Core i9-9900K (8C/16T), macOS x86-64, median of 3 runs, peak RSS via
 `/usr/bin/time -l`. Falco is single-threaded — its `-t` flag is documented in
 its own help as "NOT YET IMPLEMENTED" — so `rastqc -t 1` is the like-for-like
-row. Reproduce with `./benchmark/fetch_data.sh && ./benchmark/run_benchmark.sh`.
+row. Reproduce with
+`./benchmark/fetch_data.sh nextseq && ./benchmark/run_benchmark.sh`.
 
 | Dataset | Falco 1.2.5 | RastQC `-t 1` | RastQC `-t 4` |
 |---------|-------------|---------------|---------------|
-| DRR045135_1 — 18.7M reads, 144 bp, 828 MB | 32.6 s / 86 MB | **11.3 s** / 126 MB | **6.9 s** / 158 MB |
-| DRR048760 — 1.2M reads, 76 bp, 54 MB | 2.32 s / 88 MB | **0.83 s** / 95 MB | **0.67 s** / 128 MB |
+| DRR045135_1 — 18.7M reads, 72 bp, 828 MB | 32.6 s / 86 MB | **11.3 s** / 126 MB | **6.9 s** / 158 MB |
+| DRR048760 — 1.2M reads, 67 bp, 54 MB | 2.32 s / 88 MB | **0.83 s** / 95 MB | **0.67 s** / 128 MB |
 | Both files, one invocation | 35.1 s / 94 MB | — | **8.6 s** / 208 MB |
 
-Full method, and what changed since 0.1.0, in [`benchmark/RESULTS.md`](benchmark/RESULTS.md).
+Full method, and what changed since 0.1.0, in
+[`benchmark/RESULTS.md`](benchmark/RESULTS.md); what each dataset actually is,
+in [`benchmark/DATA.md`](benchmark/DATA.md).
 
 ### vs FastQC
 

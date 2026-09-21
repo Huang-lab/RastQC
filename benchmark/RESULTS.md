@@ -4,7 +4,7 @@ Reproduce with:
 
 ```bash
 cargo build --release
-./benchmark/fetch_data.sh          # downloads the NextSeq run used below
+./benchmark/fetch_data.sh nextseq  # the two NextSeq runs used below (~0.9 GB)
 ./benchmark/run_benchmark.sh       # picks up fastqc/falco if on PATH
 ```
 
@@ -18,6 +18,17 @@ cargo build --release
 | Falco | 1.2.5 (Bioconda) |
 | FastQC | not run here — no JRE on this machine; see the FastQC table in the README |
 | Method | 3 repetitions per row, median wall time, peak RSS via `/usr/bin/time -l` |
+| Datasets | Provenance and measured read counts in [`DATA.md`](DATA.md) |
+
+**The harness no longer reports the median.** Every wall time on this page was
+measured with a median of 3, which is what `run_benchmark.sh` reported when
+0.2.0 was released. It now reports the *fastest* of the repetitions instead:
+timing interference on this machine is one-sided and occasionally outlasts two
+of three repetitions, which a median cannot survive (one FastQC measurement
+came out 47.7 s / 242 s / 47.7 s). A fresh run is therefore not strictly
+comparable to the tables below — it can only come out equal or faster — and
+the paper's figures, which are regenerated from the CSV, already use the
+fastest. Re-measuring this page is tracked for the next release.
 
 **On thread counts.** Falco is single-threaded: its `-t/--threads` flag is
 documented in its own `--help` as *"NOT YET IMPLEMENTED IN FALCO"*. The
@@ -26,7 +37,7 @@ documented in its own `--help` as *"NOT YET IMPLEMENTED IN FALCO"*. The
 
 ## Short-read (Illumina NextSeq 500)
 
-### DRR045135_1 — 18.7M reads, 144 bp, 828 MB gzipped
+### DRR045135_1 — 18.7M reads, 72 bp, 828 MB gzipped
 
 | Tool | Wall | Peak RSS | vs Falco |
 |------|------|----------|----------|
@@ -36,7 +47,7 @@ documented in its own `--help` as *"NOT YET IMPLEMENTED IN FALCO"*. The
 | RastQC 0.1.0 `-t 1` | 64.9 s | 114 MB | 2.0× *slower* |
 | RastQC 0.1.0 `-t 4` | 20.9 s | 322 MB | 1.6× faster |
 
-### DRR048760 — 1.2M reads, 76 bp, 54 MB gzipped
+### DRR048760 — 1.2M reads, 67 bp, 54 MB gzipped
 
 | Tool | Wall | Peak RSS | vs Falco |
 |------|------|----------|----------|
@@ -85,10 +96,17 @@ whole-file modules on one instance and treats `-t` as a budget:
 Note that 0.1.0 got *slower* as `-t` rose past 4 while its memory kept
 climbing; 0.2.0 does not.
 
-## A note on the committed sample data
+## Why these datasets, and not the small sample
 
 `benchmark/data/yeast_200k.fastq.gz` is 200k reads and finishes in under half
-a second for every tool tested — that measures process startup, not
-throughput, and it is why 0.1.0's committed results looked healthy while real
-NextSeq runs did not. Use `benchmark/fetch_data.sh` before drawing any
-conclusion about performance.
+a second for every tool tested. That measures process startup, not throughput,
+and it is why 0.1.0's published results looked healthy while real NextSeq runs
+did not. Run `benchmark/fetch_data.sh` before drawing any conclusion about
+performance.
+
+Two things that file's name implies are both false: it is a subsample of
+SARS-CoV-2 amplicon data rather than yeast, and it has never been committed to
+this repository in any revision. [`DATA.md`](DATA.md) records what every
+benchmark and validation dataset actually is, measured from the files rather
+than taken from metadata, including three files in the 0.1.0 paper's set whose
+names do not match their contents.

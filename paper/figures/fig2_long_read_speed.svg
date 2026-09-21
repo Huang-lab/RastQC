@@ -1,39 +1,48 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 400" font-family="Arial, sans-serif">
-<rect width="500" height="400" fill="white"/>
-<text x="250.0" y="22" text-anchor="middle" font-size="14" font-weight="bold">Long-Read Performance: RastQC vs FastQC</text>
-<line x1="80" y1="320.0" x2="360" y2="320.0" stroke="#e0e0e0" stroke-width="0.5"/>
-<text x="72" y="324.0" text-anchor="end" font-size="11" fill="#555">0s</text>
-<line x1="80" y1="252.8" x2="360" y2="252.8" stroke="#e0e0e0" stroke-width="0.5"/>
-<text x="72" y="256.8" text-anchor="end" font-size="11" fill="#555">6s</text>
-<line x1="80" y1="185.6" x2="360" y2="185.6" stroke="#e0e0e0" stroke-width="0.5"/>
-<text x="72" y="189.6" text-anchor="end" font-size="11" fill="#555">12s</text>
-<line x1="80" y1="118.4" x2="360" y2="118.4" stroke="#e0e0e0" stroke-width="0.5"/>
-<text x="72" y="122.4" text-anchor="end" font-size="11" fill="#555">18s</text>
-<line x1="80" y1="51.19999999999999" x2="360" y2="51.19999999999999" stroke="#e0e0e0" stroke-width="0.5"/>
-<text x="72" y="55.19999999999999" text-anchor="end" font-size="11" fill="#555">24s</text>
-<rect x="95.5" y="285.056" width="35.0" height="34.944" fill="#2980b9" rx="2"/>
-<rect x="132.5" y="156.928" width="35.0" height="163.072" fill="#e74c3c" rx="2"/>
-<rect x="169.5" y="284.944" width="35.0" height="35.056000000000004" fill="#27ae60" rx="2"/>
-<text x="113.0" y="281.056" text-anchor="middle" font-size="8" fill="#2980b9">3.1s</text>
-<text x="150.0" y="152.928" text-anchor="middle" font-size="8" fill="#e74c3c">14.6s</text>
-<text x="187.0" y="280.944" text-anchor="middle" font-size="8" fill="#27ae60">3.1s</text>
-<text x="150.0" y="338" text-anchor="middle" font-size="11" fill="#333">ONT MinION</text>
-<text x="150.0" y="352" text-anchor="middle" font-size="9" fill="#888">4.7x faster</text>
-<rect x="235.5" y="289.536" width="35.0" height="30.464000000000002" fill="#2980b9" rx="2"/>
-<rect x="272.5" y="123.21600000000001" width="35.0" height="196.784" fill="#e74c3c" rx="2"/>
-<rect x="309.5" y="289.648" width="35.0" height="30.352" fill="#27ae60" rx="2"/>
-<text x="253.0" y="285.536" text-anchor="middle" font-size="8" fill="#2980b9">2.7s</text>
-<text x="290.0" y="119.21600000000001" text-anchor="middle" font-size="8" fill="#e74c3c">17.6s</text>
-<text x="327.0" y="285.648" text-anchor="middle" font-size="8" fill="#27ae60">2.7s</text>
-<text x="290.0" y="338" text-anchor="middle" font-size="11" fill="#333">PacBio Revio</text>
-<text x="290.0" y="352" text-anchor="middle" font-size="9" fill="#888">6.5x faster</text>
-<line x1="80" y1="40" x2="80" y2="320" stroke="#333" stroke-width="1.5"/>
-<line x1="80" y1="320" x2="360" y2="320" stroke="#333" stroke-width="1.5"/>
-<text x="18" y="180.0" text-anchor="middle" font-size="12" fill="#333" transform="rotate(-90 18 180.0)">Wall-Clock Time (seconds)</text>
-<rect x="370" y="60" width="14" height="14" fill="#2980b9" rx="2"/>
-<text x="390" y="72" font-size="10" fill="#333">RastQC</text>
-<rect x="370" y="82" width="14" height="14" fill="#e74c3c" rx="2"/>
-<text x="390" y="94" font-size="10" fill="#333">FastQC</text>
-<rect x="370" y="104" width="14" height="14" fill="#27ae60" rx="2"/>
-<text x="390" y="116" font-size="10" fill="#333">RastQC +LR</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" font-family="Helvetica, Arial, sans-serif">
+<rect width="640" height="420" fill="white"/>
+<text x="320" y="24" text-anchor="middle" font-size="14" font-weight="bold">Long-read performance: RastQC vs FastQC and Falco</text>
+<line x1="78" y1="346.0" x2="480" y2="346.0" stroke="#e3e3e3" stroke-width="0.5"/>
+<text x="70" y="350.0" text-anchor="end" font-size="10.5" fill="#555">0</text>
+<line x1="78" y1="286.0" x2="480" y2="286.0" stroke="#e3e3e3" stroke-width="0.5"/>
+<text x="70" y="290.0" text-anchor="end" font-size="10.5" fill="#555">14</text>
+<line x1="78" y1="226.0" x2="480" y2="226.0" stroke="#e3e3e3" stroke-width="0.5"/>
+<text x="70" y="230.0" text-anchor="end" font-size="10.5" fill="#555">28</text>
+<line x1="78" y1="166.0" x2="480" y2="166.0" stroke="#e3e3e3" stroke-width="0.5"/>
+<text x="70" y="170.0" text-anchor="end" font-size="10.5" fill="#555">42</text>
+<line x1="78" y1="106.0" x2="480" y2="106.0" stroke="#e3e3e3" stroke-width="0.5"/>
+<text x="70" y="110.0" text-anchor="end" font-size="10.5" fill="#555">56</text>
+<line x1="78" y1="46.0" x2="480" y2="46.0" stroke="#e3e3e3" stroke-width="0.5"/>
+<text x="70" y="50.0" text-anchor="end" font-size="10.5" fill="#555">70</text>
+<rect x="126.5" y="106.4" width="24.0" height="239.6" fill="#e74c3c" rx="1.5"/>
+<text x="138.5" y="103.4" text-anchor="middle" font-size="7.5" fill="#e74c3c">55.9</text>
+<rect x="152.5" y="265.6" width="24.0" height="80.4" fill="#f39c12" rx="1.5"/>
+<text x="164.5" y="262.6" text-anchor="middle" font-size="7.5" fill="#f39c12">18.8</text>
+<rect x="178.5" y="338.6" width="24.0" height="7.4" fill="#2980b9" rx="1.5"/>
+<text x="190.5" y="335.6" text-anchor="middle" font-size="7.5" fill="#2980b9">1.7</text>
+<rect x="204.5" y="329.5" width="24.0" height="16.5" fill="#27ae60" rx="1.5"/>
+<text x="216.5" y="326.5" text-anchor="middle" font-size="7.5" fill="#27ae60">3.8</text>
+<text x="178" y="362" text-anchor="middle" font-size="10" fill="#333">DRR723651_subreads</text>
+<text x="178" y="375" text-anchor="middle" font-size="8.5" fill="#888">282 MB</text>
+<rect x="327.5" y="184.3" width="24.0" height="161.7" fill="#e74c3c" rx="1.5"/>
+<text x="339.5" y="181.3" text-anchor="middle" font-size="7.5" fill="#e74c3c">37.7</text>
+<rect x="353.5" y="286.0" width="24.0" height="60.0" fill="#f39c12" rx="1.5"/>
+<text x="365.5" y="283.0" text-anchor="middle" font-size="7.5" fill="#f39c12">14.0</text>
+<rect x="379.5" y="330.6" width="24.0" height="15.4" fill="#2980b9" rx="1.5"/>
+<text x="391.5" y="327.6" text-anchor="middle" font-size="7.5" fill="#2980b9">3.6</text>
+<rect x="405.5" y="327.7" width="24.0" height="18.3" fill="#27ae60" rx="1.5"/>
+<text x="417.5" y="324.7" text-anchor="middle" font-size="7.5" fill="#27ae60">4.3</text>
+<text x="380" y="362" text-anchor="middle" font-size="10" fill="#333">DRR242198_1</text>
+<text x="380" y="375" text-anchor="middle" font-size="8.5" fill="#888">406 MB</text>
+<line x1="78" y1="46" x2="78" y2="346" stroke="#333" stroke-width="1.4"/>
+<line x1="78" y1="346" x2="480" y2="346" stroke="#333" stroke-width="1.4"/>
+<text x="17" y="196" text-anchor="middle" font-size="11.5" fill="#333" transform="rotate(-90 17 196)">Wall-clock time (seconds)</text>
+<rect x="494" y="60" width="12" height="12" fill="#e74c3c" rx="2"/>
+<text x="512" y="71" font-size="10.5" fill="#333">FastQC</text>
+<rect x="494" y="80" width="12" height="12" fill="#f39c12" rx="2"/>
+<text x="512" y="91" font-size="10.5" fill="#333">Falco</text>
+<rect x="494" y="100" width="12" height="12" fill="#2980b9" rx="2"/>
+<text x="512" y="111" font-size="10.5" fill="#333">RastQC -t N</text>
+<rect x="494" y="120" width="12" height="12" fill="#27ae60" rx="2"/>
+<text x="512" y="131" font-size="10.5" fill="#333">RastQC --long-read</text>
+<text x="494" y="154" font-size="9" fill="#888">(lower is better)</text>
 </svg>

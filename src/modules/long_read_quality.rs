@@ -189,12 +189,19 @@ impl QCModule for QualityStratifiedLength {
         if seq.quality.is_empty() {
             return;
         }
-        let mean_q: f64 = seq
+        // Sum as an integer and convert once, rather than widening every base
+        // to f64 and accumulating in floating point. On a PacBio run this loop
+        // walks the whole read — the per-position modules stop at 1000 bases,
+        // this one does not — so it is one of the few places where per-base
+        // arithmetic is worth the attention. The integer sum is also exact,
+        // where a running f64 total of hundreds of thousands of small values
+        // accumulates rounding error.
+        let sum: u64 = seq
             .quality
             .iter()
-            .map(|&q| (q.saturating_sub(33)) as f64)
-            .sum::<f64>()
-            / seq.quality.len() as f64;
+            .map(|&q| q.saturating_sub(33) as u64)
+            .sum();
+        let mean_q = sum as f64 / seq.quality.len() as f64;
 
         let len = seq.len() as u64;
         let tier = Self::quality_tier(mean_q);

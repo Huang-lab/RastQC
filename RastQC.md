@@ -5,7 +5,7 @@ RastQC is a fast sequencing quality control tool. Use this skill to run QC on FA
 ## Installation
 
 ```bash
-# Install from GitHub (requires Rust 1.70+)
+# Install from GitHub (requires Rust 1.85+)
 cargo install --git https://github.com/Huang-lab/RastQC.git
 
 # With Nanopore Fast5/POD5 support
@@ -40,7 +40,7 @@ The `--long-read` flag is auto-enabled for `.fast5` and `.pod5` files. For long-
 | `--nozip` | Write HTML report only, skip ZIP |
 | `--summary` | Force multi-file summary (auto for 2+ files) |
 | `--multiqc-json` | Output native MultiQC JSON |
-| `--exit-code` | Return 0=pass, 1=warn, 2=fail for pipeline gates |
+| `--exit-code` | Return 0=pass, 1=warn, 2=fail for pipeline gates (3 = input could not be processed, returned with or without this flag) |
 | `--serve` | Launch web browser to view reports |
 | `-q` / `--quiet` | Suppress progress output |
 | `--stdin` | Read FASTQ from stdin pipe |
@@ -136,10 +136,14 @@ Summarize:
 ## Pipeline Integration Example
 
 ```bash
-# Nextflow-style QC gate
+# Nextflow-style QC gate.
+# Test for >= 2, not == 2: exit 3 means RastQC could not process the file at
+# all (unreadable, malformed), which must stop the pipeline just as a QC
+# failure does. An `-eq 2` test lets that case through as if it had passed.
 rastqc --exit-code -o qc_results/ sample.fastq.gz
-if [ $? -eq 2 ]; then
-    echo "QC FAILED - stopping pipeline"
+status=$?
+if [ "$status" -ge 2 ]; then
+    echo "QC failed or input unreadable (exit $status) - stopping pipeline"
     exit 1
 fi
 

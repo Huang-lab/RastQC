@@ -2,10 +2,12 @@ use super::{format_count_label, PhredEncoding, QCModule, QCResult};
 use crate::config::FastQCConfig;
 use crate::io::Sequence;
 use std::any::Any;
-use std::collections::HashMap;
 
 pub struct PerSequenceQuality {
-    score_counts: HashMap<u32, u64>,
+    /// Counts indexed by the read's mean quality *character*. That mean is the
+    /// average of `u8` values, so it can never leave `0..=255` — a flat array
+    /// indexes it exactly, and replaces a hash probe per read with a store.
+    score_counts: [u64; 256],
     lowest_char: u8,
     // Results
     scores: Vec<u32>,
@@ -17,7 +19,7 @@ pub struct PerSequenceQuality {
 impl PerSequenceQuality {
     pub fn new() -> Self {
         PerSequenceQuality {
-            score_counts: HashMap::new(),
+            score_counts: [0; 256],
             lowest_char: 255,
             scores: Vec::new(),
             counts: Vec::new(),
@@ -41,34 +43,36 @@ impl QCModule for PerSequenceQuality {
             return;
         }
 
+        // One pass for both the running minimum and the sum; these were two
+        // separate walks of every quality string.
+        let mut lowest = self.lowest_char;
+        let mut sum = 0u64;
         for &q in &seq.quality {
-            if q < self.lowest_char {
-                self.lowest_char = q;
+            if q < lowest {
+                lowest = q;
             }
+            sum += q as u64;
         }
+        self.lowest_char = lowest;
 
-        let sum: u64 = seq.quality.iter().map(|&q| q as u64).sum();
-        let avg = (sum as f64 / seq.quality.len() as f64).round() as u32;
-
-        *self.score_counts.entry(avg).or_insert(0) += 1;
+        let avg = (sum as f64 / seq.quality.len() as f64).round() as usize;
+        self.score_counts[avg.min(255)] += 1;
     }
 
     fn calculate_results(&mut self, config: &FastQCConfig) {
-        if self.score_counts.is_empty() {
+        let Some(min_score) = self.score_counts.iter().position(|&c| c > 0) else {
             return;
-        }
+        };
+        let max_score = self.score_counts.iter().rposition(|&c| c > 0).unwrap();
 
         let offset = PhredEncoding::detect(self.lowest_char).offset() as u32;
-
-        let min_score = *self.score_counts.keys().min().unwrap();
-        let max_score = *self.score_counts.keys().max().unwrap();
 
         let mut max_count = 0u64;
         let mut most_frequent = 0u32;
 
         for score in min_score..=max_score {
-            let adjusted = score.saturating_sub(offset);
-            let count = self.score_counts.get(&score).copied().unwrap_or(0);
+            let adjusted = (score as u32).saturating_sub(offset);
+            let count = self.score_counts[score];
             self.scores.push(adjusted);
             self.counts.push(count as f64);
 
@@ -224,8 +228,8 @@ impl QCModule for PerSequenceQuality {
 
     fn merge_from(&mut self, other: &mut dyn QCModule) {
         if let Some(other) = other.as_any_mut().downcast_mut::<Self>() {
-            for (&score, &count) in &other.score_counts {
-                *self.score_counts.entry(score).or_insert(0) += count;
+            for (mine, &theirs) in self.score_counts.iter_mut().zip(other.score_counts.iter()) {
+                *mine += theirs;
             }
             self.lowest_char = self.lowest_char.min(other.lowest_char);
         }

@@ -40,3 +40,7 @@ Thumbs.db
 
 # Claude Code session state
 /.claude/
+
+# Python bytecode (the CI py_compile step regenerates this)
+__pycache__/
+*.pyc

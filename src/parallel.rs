@@ -1,5 +1,5 @@
 use crate::config::FastQCConfig;
-use crate::io::block::{self, BlockParseError, FastqBlockReader, RecordIter, BLOCK_SIZE};
+use crate::io::block::{self, BlockParseError, FastqBlockReader, RecordIter};
 use crate::io::fastq;
 use crate::io::{Sequence, SequenceReader};
 use crate::modules::{merge_module_sets, should_process, ModuleFactory, QCModule};
@@ -65,11 +65,51 @@ fn max_useful_workers(path: &Path) -> usize {
         .unwrap_or_default()
         .to_string_lossy()
         .to_lowercase();
+
+    // Long reads are the case where extra workers are not merely useless but
+    // actively harmful. Per sequence GC content keeps one GC model per
+    // distinct read length, and each model's size grows with that length, so
+    // every worker builds its own set — on long reads that is hundreds of MB
+    // apiece, while the reader thread remains the ceiling.
+    //
+    // Measured on a 406 MB ONT run (75.8k reads, 5.9 kb mean, 100.6 kb max):
+    //
+    //   -t 1   2.37 s   403 MB
+    //   -t 4   2.64 s   979 MB
+    //   -t 16  2.67 s  1004 MB
+    //
+    // More workers are slower *and* cost 2.5x the memory, so one is strictly
+    // the best configuration until that per-length state is shared between
+    // them. Thread budget left over goes to other files, which
+    // `split_thread_budget` in main.rs already prefers. Worker count never
+    // affects reported values, so this changes throughput and memory only.
+    if is_fastq_name(&name) {
+        if let Some(mean) = block::sample_mean_read_length(path) {
+            if mean >= LONG_READ_MEAN_LENGTH {
+                return 1;
+            }
+        }
+    }
+
     if name.ends_with(".gz") || name.ends_with(".bz2") {
         4
     } else {
         8
     }
+}
+
+/// Mean read length at or above which a file is treated as long-read for
+/// worker sizing. No Illumina platform reaches it and every ONT/PacBio run
+/// clears it by several times over, so the exact value is not delicate.
+const LONG_READ_MEAN_LENGTH: usize = 1000;
+
+/// Whether the filename looks like a FASTQ (optionally compressed).
+fn is_fastq_name(lowercase_name: &str) -> bool {
+    ["fastq", "fq"].iter().any(|ext| {
+        lowercase_name.ends_with(&format!(".{ext}"))
+            || lowercase_name.ends_with(&format!(".{ext}.gz"))
+            || lowercase_name.ends_with(&format!(".{ext}.bz2"))
+    })
 }
 
 /// Whether `path` can take the FASTQ block fast path.
@@ -80,12 +120,7 @@ fn fastq_block_path_applicable(path: &Path) -> bool {
         .to_string_lossy()
         .to_lowercase();
 
-    let is_fastq = ["fastq", "fq"].iter().any(|ext| {
-        name.ends_with(&format!(".{ext}"))
-            || name.ends_with(&format!(".{ext}.gz"))
-            || name.ends_with(&format!(".{ext}.bz2"))
-    });
-    if !is_fastq {
+    if !is_fastq_name(&name) {
         return false;
     }
 
@@ -115,12 +150,27 @@ fn process_fastq_blocks(
     let capacity = num_workers + 2;
     let (block_tx, block_rx) = channel::bounded::<Arc<Vec<u8>>>(capacity);
     let (serial_tx, serial_rx) = channel::bounded::<Arc<Vec<u8>>>(capacity);
+    // Consumers hand finished blocks back so the reader can refill the same
+    // megabyte instead of allocating a new one. A fresh `Vec` per block meant
+    // an mmap and a `madvise` teardown per megabyte of input, which profiled
+    // as the single largest cost in the run — larger than any QC module.
+    let (recycle_tx, recycle_rx) = channel::unbounded::<Arc<Vec<u8>>>();
 
     let path_owned = path.to_path_buf();
     let reader_handle = thread::spawn(move || -> Result<()> {
         let mut reader = FastqBlockReader::new(fastq::open_decompressed(&path_owned)?);
+        let mut pool: Vec<Vec<u8>> = Vec::new();
         loop {
-            let mut buf = Vec::with_capacity(BLOCK_SIZE);
+            // Each block is held by two consumers, so the first return still
+            // has a live sibling and `try_unwrap` fails; dropping that handle
+            // leaves the second return able to reclaim the buffer.
+            while let Ok(done) = recycle_rx.try_recv() {
+                if let Ok(mut v) = Arc::try_unwrap(done) {
+                    v.clear();
+                    pool.push(v);
+                }
+            }
+            let mut buf = pool.pop().unwrap_or_else(block::new_block_buffer);
             if !reader.next_block(&mut buf)? {
                 return Ok(());
             }
@@ -138,6 +188,7 @@ fn process_fastq_blocks(
 
     // The in-order consumer: one module set, every block, file order.
     let serial_config = config.clone();
+    let serial_recycle = recycle_tx.clone();
     let serial_handle = thread::spawn(move || -> Result<ModuleState, BlockParseError> {
         let mut modules = ModuleFactory::create_modules(&serial_config);
         let mut seq = Sequence::empty();
@@ -158,6 +209,7 @@ fn process_fastq_blocks(
                     module.process_sequence(&seq);
                 }
             }
+            let _ = serial_recycle.send(block);
         }
         // Read counts come from the pool workers; this instance would
         // double them.
@@ -168,6 +220,7 @@ fn process_fastq_blocks(
     for _ in 0..num_workers {
         let rx = block_rx.clone();
         let worker_config = config.clone();
+        let worker_recycle = recycle_tx.clone();
         let handle = thread::spawn(move || -> Result<ModuleState, BlockParseError> {
             let mut modules = ModuleFactory::create_modules(&worker_config);
             let mut count: u64 = 0;
@@ -195,6 +248,7 @@ fn process_fastq_blocks(
                     }
                     count += 1;
                 }
+                let _ = worker_recycle.send(block);
             }
             Ok((modules, count))
         });
