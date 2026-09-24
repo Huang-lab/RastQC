@@ -14,21 +14,25 @@ cargo build --release
 |---|---|
 | Machine | Intel Core i9-9900K @ 3.6 GHz, 8 cores / 16 threads, 32 GB RAM |
 | OS | macOS 15 (Darwin 24.6.0), x86-64 |
-| RastQC | 0.2.0 (release build, `lto = true`) |
+| RastQC | `main` at `faa547b` (unreleased) and 0.2.0 — release builds, `lto = true` |
 | Falco | 1.2.5 (Bioconda) |
 | FastQC | not run here — no JRE on this machine; see the FastQC table in the README |
-| Method | 3 repetitions per row, median wall time, peak RSS via `/usr/bin/time -l` |
+| Method | 3 repetitions per row, **fastest** wall time, peak RSS across the same runs via `/usr/bin/time -l` |
+| Measured | 2026-09-24 — every Falco, 0.2.0 and `main` row below in one sitting |
 | Datasets | Provenance and measured read counts in [`DATA.md`](DATA.md) |
 
-**The harness no longer reports the median.** Every wall time on this page was
-measured with a median of 3, which is what `run_benchmark.sh` reported when
-0.2.0 was released. It now reports the *fastest* of the repetitions instead:
-timing interference on this machine is one-sided and occasionally outlasts two
-of three repetitions, which a median cannot survive (one FastQC measurement
-came out 47.7 s / 242 s / 47.7 s). A fresh run is therefore not strictly
-comparable to the tables below — it can only come out equal or faster — and
-the paper's figures, which are regenerated from the CSV, already use the
-fastest. Re-measuring this page is tracked for the next release.
+**Which statistic.** The harness reports the *fastest* of its repetitions, not
+the median: timing interference on this machine is one-sided and occasionally
+outlasts two of three repetitions, which a median cannot survive (one FastQC
+measurement came out 47.7 s / 242 s / 47.7 s). Every Falco, 0.2.0 and `main`
+row on this page was measured under that statistic, in one sitting, so the
+rows are comparable to each other and to the paper's figures.
+
+**The RastQC 0.1.0 rows are the exception**, marked †. They have not been
+re-measured and are still the 0.2.0-era median of 3. A median can only be
+equal to or slower than the minimum of the same runs, so those rows are if
+anything slightly pessimistic, and the `vs Falco` ratios computed against them
+slightly overstate the gap.
 
 **On thread counts.** Falco is single-threaded: its `-t/--threads` flag is
 documented in its own `--help` as *"NOT YET IMPLEMENTED IN FALCO"*. The
@@ -41,33 +45,79 @@ documented in its own `--help` as *"NOT YET IMPLEMENTED IN FALCO"*. The
 
 | Tool | Wall | Peak RSS | vs Falco |
 |------|------|----------|----------|
-| Falco 1.2.5 | 32.6 s | 86 MB | — |
-| **RastQC 0.2.0 `-t 1`** | **11.3 s** | 126 MB | **2.9× faster** |
-| **RastQC 0.2.0 `-t 4`** | **6.9 s** | 158 MB | **4.7× faster** |
-| RastQC 0.1.0 `-t 1` | 64.9 s | 114 MB | 2.0× *slower* |
-| RastQC 0.1.0 `-t 4` | 20.9 s | 322 MB | 1.6× faster |
+| Falco 1.2.5 | 30.55 s | 86 MB | — |
+| **RastQC `main` `-t 1`** | **9.83 s** | 73 MB | **3.1× faster** |
+| **RastQC `main` `-t 4`** | **6.66 s** | 70 MB | **4.6× faster** |
+| RastQC 0.2.0 `-t 1` | 10.43 s | 118 MB | 2.9× faster |
+| RastQC 0.2.0 `-t 4` | 7.10 s | 150 MB | 4.3× faster |
+| RastQC 0.1.0 `-t 1` † | 64.9 s | 114 MB | 2.1× *slower* |
+| RastQC 0.1.0 `-t 4` † | 20.9 s | 322 MB | 1.5× faster |
 
 ### DRR048760 — 1.2M reads, 67 bp, 54 MB gzipped
 
 | Tool | Wall | Peak RSS | vs Falco |
 |------|------|----------|----------|
-| Falco 1.2.5 | 2.32 s | 88 MB | — |
-| **RastQC 0.2.0 `-t 1`** | **0.83 s** | 95 MB | **2.8× faster** |
-| **RastQC 0.2.0 `-t 4`** | **0.67 s** | 128 MB | **3.5× faster** |
-| RastQC 0.1.0 `-t 1` | 4.37 s | 107 MB | 1.9× *slower* |
+| Falco 1.2.5 | 2.34 s | 88 MB | — |
+| **RastQC `main` `-t 1`** | **0.78 s** | 74 MB | **3.0× faster** |
+| **RastQC `main` `-t 4`** | **0.66 s** | 78 MB | **3.5× faster** |
+| RastQC 0.2.0 `-t 1` | 0.80 s | 104 MB | 2.9× faster |
+| RastQC 0.2.0 `-t 4` | 0.70 s | 126 MB | 3.3× faster |
+| RastQC 0.1.0 `-t 1` † | 4.37 s | 107 MB | 1.9× *slower* |
 
 ### Both files in one invocation
 
 | Tool | Wall | Peak RSS | vs Falco |
 |------|------|----------|----------|
-| Falco 1.2.5 | 35.1 s | 94 MB | — |
-| **RastQC 0.2.0 `-t 4`** | **8.6 s** | 208 MB | **4.1× faster** |
+| Falco 1.2.5 | 32.80 s | 94 MB | — |
+| **RastQC `main` `-t 4`** | **7.71 s** | 133 MB | **4.3× faster** |
+| RastQC 0.2.0 `-t 4` | 7.60 s | 211 MB | 4.3× faster |
+
+This is the one row where `main` does not beat 0.2.0 on wall time — 7.71 s
+against 7.60 s, a 1.4% difference that is inside this machine's run-to-run
+spread. Peak RSS drops from 211 MB to 133 MB over the same pair.
+
+## What changed between 0.2.0 and `main`
+
+Measured on the same machine and in the same sitting as the tables above.
+Reported QC values are unchanged: `fastqc_data.txt` from a 0.2.0 `-t 1` run
+matches `main` at `-t 4` and `-t 16` byte for byte, on both a short-read and a
+long-read file. The changes themselves are in the
+[CHANGELOG](../CHANGELOG.md#unreleased).
+
+### ERR5897746_1 — 4.3M reads, 126 bp, 320 MB gzipped
+
+| | 0.2.0 | `main` |
+|---|---|---|
+| wall, `-t 1` | 4.14 s | **3.74 s** |
+| wall, `-t 4` | 2.53 s | **2.28 s** |
+| wall, `-t 16` | 2.49 s | **2.31 s** |
+| system time, `-t 4` | 0.27 s | **0.09 s** |
+| peak RSS, `-t 1` | 126 MB | **72 MB** |
+| peak RSS, `-t 4` | 149 MB | **73 MB** |
+| peak RSS, `-t 16` | 147 MB | **75 MB** |
+
+### DRR242198_1 — 75.8k ONT reads, 5.9 kb mean, 100.6 kb max, 406 MB
+
+| | 0.2.0 | `main` |
+|---|---|---|
+| wall, `-t 1` | 2.53 s | **2.42 s** |
+| wall, `-t 4` | 2.98 s | **2.39 s** |
+| wall, `-t 16` | 2.74 s | **2.40 s** |
+| peak RSS, `-t 1` | 460 MB | **422 MB** |
+| peak RSS, `-t 4` | 1045 MB | **410 MB** |
+| peak RSS, `-t 16` | 1021 MB | **415 MB** |
+
+0.2.0 got *slower* on this long-read file as `-t` rose — 2.98 s at `-t 4`
+against 2.53 s at `-t 1`, for 2.3× the memory — because its per-file worker
+cap keyed off the filename extension, so an ONT run still got four workers and
+each built its own set of per-length GC models. `main` samples mean read
+length from the first block instead and gives such files one worker.
 
 ## What changed between 0.1.0 and 0.2.0
 
 [Issue #12](https://github.com/Huang-lab/RastQC/issues/12) reported RastQC
 running ~2× slower than Falco on NextSeq runs. That reproduced exactly: 0.1.0
-at `-t 1` was 2.2× slower than Falco on DRR045135_1 and 1.9× slower on
+at `-t 1` was 2.1× slower than Falco on DRR045135_1 and 1.9× slower on
 DRR048760. Profiling found the causes were not where the tool's own
 documentation assumed:
 
@@ -86,7 +136,7 @@ memory grew with `-t` — and because file-level and within-file parallelism
 both took the full `-t`, it grew with the *product*. 0.2.0 keeps the
 whole-file modules on one instance and treats `-t` as a budget:
 
-| Run | 0.1.0 | 0.2.0 |
+| Run | 0.1.0 † | 0.2.0 † |
 |---|---|---|
 | 1 file (828 MB gz), `-t 4` | 322 MB / 20.9 s | **163 MB / 7.4 s** |
 | 1 file (828 MB gz), `-t 16` | 1119 MB / 22.3 s | **146 MB / 6.9 s** |
@@ -94,7 +144,9 @@ whole-file modules on one instance and treats `-t` as a budget:
 | 6 files (240 MB each), `-t 16` | 5148 MB / 7.0 s | **586 MB / 1.3 s** |
 
 Note that 0.1.0 got *slower* as `-t` rose past 4 while its memory kept
-climbing; 0.2.0 does not.
+climbing; 0.2.0 does not. This table is 0.2.0-era and has not been re-measured
+under the current harness; for `main`'s memory against 0.2.0's, see the tables
+above, where a `-t 4` short-read run drops from 150 MB to 70 MB.
 
 ## Why these datasets, and not the small sample
 

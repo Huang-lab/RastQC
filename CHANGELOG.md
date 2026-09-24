@@ -7,36 +7,41 @@ All notable changes to RastQC are documented here.
 ### Performance
 
 Measured against 0.2.0 on the same machine (Intel Core i9-9900K, 8C/16T,
-macOS 15 x86-64), repeated runs, peak RSS via `/usr/bin/time -l`. The harness
-changed which statistic it reports partway through this cycle (see Changed), so
-re-measure this table under one harness version before tagging the release.
-Reported values are unchanged: `fastqc_data.txt` from a 0.2.0 `-t 1` run
-matches this build at `-t 4` and `-t 16` byte for byte, on both a short-read
-and a long-read file.
+macOS 15 x86-64) on 2026-09-24: 3 repetitions per row, fastest wall time, peak
+RSS across the same runs via `/usr/bin/time -l`. The harness changed which
+statistic it reports partway through this cycle (see Changed); every row below,
+and every row in [`benchmark/RESULTS.md`](benchmark/RESULTS.md) that is not
+marked 0.1.0, was re-measured in one sitting under the current one. Reported
+values are unchanged: `fastqc_data.txt` from a 0.2.0 `-t 1` run matches this
+build at `-t 4` and `-t 16` byte for byte, on both a short-read and a long-read
+file.
 
 Short-read, ERR5897746_1 (4.3M reads, 126 bp, 320 MB gzipped):
 
 | | 0.2.0 | this build |
 |---|---|---|
-| wall, `-t 1` | 4.39 s | **3.96 s** |
-| wall, `-t 4` | 2.90 s | **2.54 s** |
-| system time, `-t 4` | 0.43 s | **0.12 s** |
-| peak RSS, `-t 4` | 148 MB | **74 MB** |
-| peak RSS, `-t 16` | 142 MB | **78 MB** |
+| wall, `-t 1` | 4.14 s | **3.74 s** |
+| wall, `-t 4` | 2.53 s | **2.28 s** |
+| wall, `-t 16` | 2.49 s | **2.31 s** |
+| system time, `-t 4` | 0.27 s | **0.09 s** |
+| peak RSS, `-t 1` | 126 MB | **72 MB** |
+| peak RSS, `-t 4` | 149 MB | **73 MB** |
+| peak RSS, `-t 16` | 147 MB | **75 MB** |
 
 Long-read, DRR242198_1 (75.8k ONT reads, 5.9 kb mean, 100.6 kb max, 406 MB):
 
 | | 0.2.0 | this build |
 |---|---|---|
-| peak RSS, `-t 1` | 403 MB | 401 MB |
-| peak RSS, `-t 4` | 979 MB | **413 MB** |
-| peak RSS, `-t 16` | 1004 MB | **395 MB** |
+| wall, `-t 4` | 2.98 s | **2.39 s** |
+| peak RSS, `-t 1` | 460 MB | **422 MB** |
+| peak RSS, `-t 4` | 1045 MB | **410 MB** |
+| peak RSS, `-t 16` | 1021 MB | **415 MB** |
 
 - **The block reader now recycles its buffers.** It allocated a fresh 1 MB
   `Vec` for every block and dropped it once both consumers were done, so each
   megabyte of input cost an `mmap` and a `madvise` teardown — which profiled
   as the single largest cost in a run, above every QC module. Finished blocks
-  are now returned to the reader and refilled. This is where the 3.6x drop in
+  are now returned to the reader and refilled. This is where the 3x drop in
   system time and roughly half the peak memory come from.
 - **The block buffer no longer reallocates on every block.** `next_block`
   fills in 128 KB chunks and stops once it has passed `BLOCK_SIZE`, so the
@@ -50,7 +55,7 @@ Long-read, DRR242198_1 (75.8k ONT reads, 5.9 kb mean, 100.6 kb max, 406 MB):
   holds *L+1* inner vectors, so every worker built its own set — Illumina has
   one length and one model, an ONT run buckets to ~100 lengths and millions
   of vectors — while the reader thread stayed the ceiling. At `-t 4` that was
-  *slower* than `-t 1` (2.64 s vs 2.37 s) for 2.5x the memory. The cap now
+  *slower* than `-t 1` (2.98 s vs 2.53 s) for 2.3x the memory. The cap now
   samples mean read length from the first block and gives such files one
   worker; the rest of the budget goes to other files. A 282 MB PacBio run
   drops from 465 MB to 198 MB at `-t 4`. Short-read files are untouched and
@@ -117,8 +122,8 @@ Long-read, DRR242198_1 (75.8k ONT reads, 5.9 kb mean, 100.6 kb max, 406 MB):
   47.7 s — which a median cannot survive and a minimum can. Peak RSS over the
   same runs agreed within 15% on 42 of 45 measurements, so only wall time was
   affected. The paper's figures are regenerated from the CSV and so already use
-  it; `benchmark/RESULTS.md` still carries 0.2.0's median-of-3 numbers and says
-  so.
+  it; `benchmark/RESULTS.md` has now been re-measured under it too, and marks
+  the RastQC 0.1.0 rows it did not re-run.
 - `benchmark/fetch_data.sh` gained a `human` group: one full 30X human WGS run
   (ERR3239334, 12 GB). It is the only group that takes hours rather than
   minutes, so `short long` remains the way to cover every platform and three
@@ -182,7 +187,10 @@ Prompted by [#12](https://github.com/Huang-lab/RastQC/issues/12), which
 reported RastQC running ~2× slower than Falco on NextSeq runs. That
 reproduced: on a public 18.7M-read NextSeq 500 run, 0.1.0 at `-t 1` took
 64.9 s against Falco's 32.6 s. 0.2.0 takes 11.3 s at `-t 1` and 6.9 s at
-`-t 4`. Full numbers and method in [`benchmark/RESULTS.md`](benchmark/RESULTS.md).
+`-t 4`. Those are the median of 3 that the harness reported at the time;
+re-measured as the fastest of 3, Falco is 30.55 s and 0.2.0 is 10.43 s and
+7.10 s, and 0.1.0 has not been re-run. Full numbers and method in
+[`benchmark/RESULTS.md`](benchmark/RESULTS.md).
 
 - **Adapter Content** searched every start position of every read for every
   adapter, byte by byte — 53% of all CPU time. Replaced with a single
