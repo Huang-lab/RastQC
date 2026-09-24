@@ -5,7 +5,7 @@ A fast quality control tool for high-throughput sequencing data, written in Rust
 ## Features
 
 - **15 QC modules**: all 12 FastQC modules + 3 long-read QC modules
-- **Fast**: 2.9x faster than Falco single-threaded, 4.7x with 4 threads, on a real 18.7M-read NextSeq run ([benchmarks](benchmark/RESULTS.md))
+- **Fast**: 2.9x faster than Falco single-threaded, 4.3x with 4 threads, on a real 18.7M-read NextSeq run ([benchmarks](benchmark/RESULTS.md))
 - **Portable**: single 2.6 MB static binary, no Java runtime needed
 - **Compatible output**: HTML reports, tab-separated data files, ZIP archives, native MultiQC JSON
 - **Multi-file summary**: overview dashboard when processing many files
@@ -292,21 +292,25 @@ Two comparisons, measured differently — read both.
 
 ### vs Falco (measured for this release)
 
-Intel Core i9-9900K (8C/16T), macOS x86-64, median of 3 runs, peak RSS via
+Intel Core i9-9900K (8C/16T), macOS x86-64, fastest of 3 runs, peak RSS via
 `/usr/bin/time -l`. Falco is single-threaded — its `-t` flag is documented in
 its own help as "NOT YET IMPLEMENTED" — so `rastqc -t 1` is the like-for-like
 row. Reproduce with
 `./benchmark/fetch_data.sh nextseq && ./benchmark/run_benchmark.sh`.
 
-| Dataset | Falco 1.2.5 | RastQC `-t 1` | RastQC `-t 4` |
-|---------|-------------|---------------|---------------|
-| DRR045135_1 — 18.7M reads, 72 bp, 828 MB | 32.6 s / 86 MB | **11.3 s** / 126 MB | **6.9 s** / 158 MB |
-| DRR048760 — 1.2M reads, 67 bp, 54 MB | 2.32 s / 88 MB | **0.83 s** / 95 MB | **0.67 s** / 128 MB |
-| Both files, one invocation | 35.1 s / 94 MB | — | **8.6 s** / 208 MB |
+| Dataset | Falco 1.2.5 | RastQC 0.2.0 `-t 1` | RastQC 0.2.0 `-t 4` |
+|---------|-------------|---------------------|---------------------|
+| DRR045135_1 — 18.7M reads, 72 bp, 828 MB | 30.55 s / 86 MB | **10.43 s** / 118 MB | **7.10 s** / 150 MB |
+| DRR048760 — 1.2M reads, 67 bp, 54 MB | 2.34 s / 88 MB | **0.80 s** / 104 MB | **0.70 s** / 126 MB |
+| Both files, one invocation | 32.80 s / 94 MB | — | **7.60 s** / 211 MB |
 
-Full method, and what changed since 0.1.0, in
-[`benchmark/RESULTS.md`](benchmark/RESULTS.md); what each dataset actually is,
-in [`benchmark/DATA.md`](benchmark/DATA.md).
+0.2.0 is what `cargo install rastqc` and the Bioconda packages give you, so it
+is what this table reports. The unreleased build on `main` is faster and
+leaner again — 9.83 s / 73 MB and 6.66 s / 70 MB on the first row, 4.6× Falco
+at `-t 4` — and is measured side by side with 0.2.0 in
+[`benchmark/RESULTS.md`](benchmark/RESULTS.md), along with the full method and
+what changed since 0.1.0. What each dataset actually is, in
+[`benchmark/DATA.md`](benchmark/DATA.md).
 
 ### vs FastQC
 
